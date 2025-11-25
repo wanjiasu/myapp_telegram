@@ -2,3 +2,4 @@ fastapi
 requests
 python-dotenv
 uvicorn[standard]
+psycopg[binary]>=3.1
