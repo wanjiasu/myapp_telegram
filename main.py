@@ -47,6 +47,30 @@ def _is_start_command(text: str) -> bool:
         return False
     return t.startswith("/start")
 
+def _extract_chatwoot_fields(body: dict):
+    b = body or {}
+    data = b.get("data") or b.get("payload") or b
+    message = data.get("message") or data.get("messages") or {}
+    if isinstance(message, list):
+        message = message[-1] if message else {}
+    conversation = data.get("conversation") or b.get("conversation") or {}
+    content = data.get("content") or message.get("content") or b.get("content")
+    message_type = data.get("message_type") or message.get("message_type") or b.get("message_type")
+    conversation_id = (
+        data.get("conversation_id")
+        or message.get("conversation_id")
+        or conversation.get("id")
+        or b.get("conversation_id")
+    )
+    account_id = (
+        data.get("account_id")
+        or conversation.get("account_id")
+        or message.get("account_id")
+        or b.get("account_id")
+        or (b.get("account") or {}).get("id")
+    )
+    return content, message_type, conversation_id, account_id
+
 @app.get("/start")
 async def start():
     return {"message": WELCOME_TEXT}
@@ -58,27 +82,39 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     if not event:
         event = body.get("event")
-    data = body.get("data") or body
     if event == "message_created":
-        message = data.get("message") or {}
-        conversation = data.get("conversation") or {}
-        content = data.get("content") or message.get("content")
-        message_type = data.get("message_type") or message.get("message_type")
-        conversation_id = (
-            data.get("conversation_id")
-            or conversation.get("id")
-            or message.get("conversation_id")
-        )
-        account_id = (
-            data.get("account_id")
-            or conversation.get("account_id")
-            or message.get("account_id")
-        )
+        content, message_type, conversation_id, account_id = _extract_chatwoot_fields(body)
         if _is_start_command(content) and message_type == "incoming":
             if conversation_id and account_id:
                 background_tasks.add_task(
                     send_chatwoot_reply, int(account_id), int(conversation_id), WELCOME_TEXT
                 )
             else:
-                logger.warning("Webhook missing conversation_id/account_id, skip reply")
+                d = body.get("data") or {}
+                p = body.get("payload") or {}
+                presence = {
+                    "has_data": bool(body.get("data")),
+                    "has_payload": bool(body.get("payload")),
+                    "has_message": bool((d.get("message") or p.get("message") or body.get("message"))),
+                    "has_conversation": bool((d.get("conversation") or p.get("conversation") or body.get("conversation"))),
+                    "has_conversation_id": bool(d.get("conversation_id") or p.get("conversation_id") or body.get("conversation_id")),
+                    "has_account_id": bool(
+                        d.get("account_id")
+                        or p.get("account_id")
+                        or body.get("account_id")
+                        or (d.get("conversation") or {}).get("account_id")
+                        or (p.get("conversation") or {}).get("account_id")
+                    ),
+                }
+                logger.warning(f"Webhook missing conversation_id/account_id, presence={presence}")
     return {"status": "ok"}
+
+@app.get("/health")
+async def health():
+    base_url = _chatwoot_base_url()
+    token = _chatwoot_token()
+    return {
+        "base_url_configured": bool(base_url),
+        "token_configured": bool(token),
+        "base_url": base_url or "",
+    }
