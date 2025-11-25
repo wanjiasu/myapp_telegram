@@ -36,6 +36,12 @@ def send_chatwoot_reply(account_id: int, conversation_id: int, content: str) -> 
     except Exception:
         pass
 
+def _is_start_command(text: str) -> bool:
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    return t.startswith("/start")
+
 @app.get("/start")
 async def start():
     return {"message": WELCOME_TEXT}
@@ -49,9 +55,9 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
         event = body.get("event")
     data = body.get("data") or body
     if event == "message_created":
-        content = str(data.get("content") or "").strip()
+        content = data.get("content")
         message_type = data.get("message_type")
-        if content.lower() == "/start" and message_type == "incoming":
+        if _is_start_command(content) and message_type == "incoming":
             conversation_id = data.get("conversation_id")
             account_id = data.get("account_id")
             if conversation_id and account_id:
