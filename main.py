@@ -40,6 +40,12 @@ def init_db() -> None:
                 )
                 cur.execute(
                     """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS chatroom_id TEXT
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS chat_messages (
                         id BIGSERIAL PRIMARY KEY,
                         chatroom_id TEXT,
@@ -69,6 +75,7 @@ def init_db() -> None:
 def store_message(body: dict) -> None:
     try:
         content, message_type, conversation_id, account_id = _extract_chatwoot_fields(body)
+        chatroom_id_raw = _extract_chatroom_id(body)
         b = body or {}
         data = b.get("data") or b.get("payload") or b
         sender = data.get("sender") or data.get("contact") or {}
@@ -101,14 +108,15 @@ def store_message(body: dict) -> None:
                 if external_id is not None:
                     cur.execute(
                         """
-                        INSERT INTO users (external_id, username)
-                        VALUES (%s, %s)
+                        INSERT INTO users (external_id, username, chatroom_id)
+                        VALUES (%s, %s, %s)
                         ON CONFLICT (external_id) DO UPDATE SET
                             username = EXCLUDED.username,
+                            chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
                             updated_at = NOW()
                         RETURNING id
                         """,
-                        (str(external_id), username),
+                        (str(external_id), username, str(chatroom_id_raw) if chatroom_id_raw is not None else None),
                     )
                     row = cur.fetchone()
                     user_id = row[0] if row else None
@@ -134,7 +142,7 @@ def store_message(body: dict) -> None:
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        str(conversation_id) if conversation_id is not None else None,
+                        str(chatroom_id_raw) if chatroom_id_raw is not None else (str(conversation_id) if conversation_id is not None else None),
                         acc_id_int,
                         conv_id_int,
                         user_id,
@@ -208,6 +216,28 @@ def _extract_chatwoot_fields(body: dict):
         or (b.get("account") or {}).get("id")
     )
     return content, message_type, conversation_id, account_id
+
+def _extract_chatroom_id(body: dict):
+    b = body or {}
+    data = b.get("data") or b.get("payload") or b
+    message = data.get("message") or {}
+    conversation = data.get("conversation") or {}
+    attrs_conv = conversation.get("additional_attributes") or {}
+    attrs_msg = message.get("additional_attributes") or {}
+    chatroom_id = (
+        attrs_conv.get("chat_id")
+        or attrs_msg.get("chat_id")
+        or attrs_conv.get("source_id")
+        or attrs_msg.get("source_id")
+        or data.get("chat_id")
+        or data.get("source_id")
+        or message.get("source_id")
+    )
+    if not chatroom_id:
+        cid = data.get("conversation_id") or message.get("conversation_id")
+        if isinstance(cid, str):
+            chatroom_id = cid
+    return chatroom_id
 
 @app.get("/start")
 async def start():
