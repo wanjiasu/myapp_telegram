@@ -547,11 +547,24 @@ def _ai_pick_reply(body: dict) -> str:
         when_local = fixture_date + timedelta(hours=offset) if fixture_date else None
         when_str = when_local.strftime("%Y-%m-%d %H:%M") if when_local else ""
         tags = _format_tags(key_tag_evidence)
+        pw = str(predict_winner).strip().lower() if predict_winner is not None else ""
+        if pw in ("3", "home", "主胜", "h"):
+            result_label = "主胜"
+        elif pw in ("1", "draw", "平局", "主平", "d"):
+            result_label = "主平"
+        elif pw in ("0", "away", "客胜", "a"):
+            result_label = "客胜"
+        else:
+            result_label = str(predict_winner)
+        try:
+            confidence_pct = f"{round(float(confidence) * 100)}%"
+        except Exception:
+            confidence_pct = str(confidence)
         block = (
             f"⚽️ 第{i}场: {home_name} vs {away_name}\n"
             f"🕒 比赛时间: {when_str}\n"
-            f"🏆 预测结果: {predict_winner}\n"
-            f"🎯 把握: {confidence:.2f}\n"
+            f"🏆 预测结果: {result_label}\n"
+            f"🎯 把握: {confidence_pct}\n"
             f"💡 核心观点: {tags}"
         )
         out.append(block)
