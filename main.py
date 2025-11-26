@@ -13,7 +13,10 @@ except Exception:
 app = FastAPI()
 logger = logging.getLogger(__name__)
 
-WELCOME_TEXT = "欢迎使用客服机器人！输入 /start 获取帮助"
+WELCOME_TEXT = """欢迎使用客服机器人。
+我们提供赛事检索与基本面分析。
+重点覆盖：英超、西甲、意甲、德甲、法甲、欧冠、世界杯。
+请选择地区：🇵🇭 菲律宾 | 🇺🇸 美国。"""
 
 def _pg_dsn() -> str:
     user = os.getenv("POSTGRES_USER", "postgres")
@@ -66,6 +69,12 @@ def init_db() -> None:
                     ADD COLUMN IF NOT EXISTS contact_id TEXT,
                     ADD COLUMN IF NOT EXISTS inbox_id BIGINT,
                     ADD COLUMN IF NOT EXISTS source_id TEXT
+                    """
+                )
+                cur.execute(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS country TEXT
                     """
                 )
                 conn.commit()
@@ -239,6 +248,65 @@ def _extract_chatroom_id(body: dict):
             chatroom_id = cid
     return chatroom_id
 
+def _extract_external_id(body: dict):
+    b = body or {}
+    data = b.get("data") or b.get("payload") or b
+    sender = data.get("sender") or data.get("contact") or {}
+    external_id = (
+        sender.get("id")
+        or data.get("sender_id")
+        or (data.get("contact") or {}).get("id")
+    )
+    if external_id is None:
+        external_id = _extract_chatroom_id(body)
+    return external_id
+
+def _normalize_country(text: str):
+    t = str(text or "").strip().lower()
+    if not t:
+        return None
+    if ("菲律宾" in t) or ("ph" == t) or ("🇵🇭" in t):
+        return "PH"
+    if ("美国" in t) or ("us" == t) or ("🇺🇸" in t):
+        return "US"
+    return None
+
+def set_user_country(body: dict, choice_text: str) -> None:
+    try:
+        country = _normalize_country(choice_text)
+        if not country:
+            return
+        external_id = _extract_external_id(body)
+        chatroom_id_raw = _extract_chatroom_id(body)
+        username = None
+        b = body or {}
+        data = b.get("data") or b.get("payload") or b
+        sender = data.get("sender") or data.get("contact") or {}
+        username = sender.get("name") or data.get("name") or b.get("name")
+        with psycopg.connect(_pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, country)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        country = EXCLUDED.country,
+                        updated_at = NOW()
+                    RETURNING id
+                    """,
+                    (
+                        str(external_id) if external_id is not None else None,
+                        username,
+                        str(chatroom_id_raw) if chatroom_id_raw is not None else None,
+                        country,
+                    ),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("DB set country error")
+
 @app.get("/start")
 async def start():
     return {"message": WELCOME_TEXT}
@@ -264,6 +332,14 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
             pass
         if message_type == "incoming":
             background_tasks.add_task(store_message, body)
+            choice = _normalize_country(content)
+            if choice:
+                background_tasks.add_task(set_user_country, body, content)
+                if conversation_id and account_id:
+                    ack = "已选择菲律宾" if choice == "PH" else "已选择美国"
+                    background_tasks.add_task(
+                        send_chatwoot_reply, int(account_id), int(conversation_id), ack
+                    )
         if _is_start_command(content) and message_type == "incoming":
             if conversation_id and account_id:
                 background_tasks.add_task(
