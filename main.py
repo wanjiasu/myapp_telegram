@@ -326,12 +326,6 @@ def _is_ai_pick_command(text: str) -> bool:
         return False
     return t.startswith("/ai_pick")
 
-def _is_ai_history_command(text: str) -> bool:
-    t = str(text or "").strip().lower()
-    if not t:
-        return False
-    return t.startswith("/ai_history")
-
 def _extract_chatwoot_fields(body: dict):
     b = body or {}
     data = b.get("data") or b.get("payload") or b
@@ -460,122 +454,6 @@ def _ai_pick_reply(body: dict) -> str:
         out.append(block)
     return "\n\n".join(out)
 
-def _parse_history_scope(text: str) -> str:
-    t = str(text or "").lower()
-    if "所有" in t:
-        return "all"
-    if "7天" in t or "七天" in t:
-        return "7d"
-    if "1天" in t or "一天" in t or "昨日" in t:
-        return "1d"
-    return "all"
-
-def _ai_history_reply(body: dict, scope: str) -> str:
-    country = _get_country_for_chat(body)
-    offset = _read_offset(country) if country else 0
-    now_utc = datetime.now(timezone.utc)
-    local = now_utc + timedelta(hours=offset)
-    local_day = datetime(local.year, local.month, local.day, tzinfo=timezone.utc)
-    start_utc_all = None
-    end_utc_all = None
-    start_utc_7d = local_day - timedelta(days=7) - timedelta(hours=offset)
-    end_utc_7d = local_day + timedelta(days=1) - timedelta(hours=offset)
-    start_utc_1d = local_day - timedelta(days=1) - timedelta(hours=offset)
-    end_utc_1d = local_day - timedelta(hours=offset)
-    with psycopg.connect(_pg_dsn()) as conn:
-        with conn.cursor() as cur:
-            def _stats(start_utc, end_utc):
-                if start_utc is None and end_utc is None:
-                    cur.execute(
-                        """
-                        SELECT
-                          COUNT(*) FILTER (
-                            WHERE e.result IS NOT NULL
-                          ) AS total,
-                          COUNT(*) FILTER (
-                            WHERE e.result IS NOT NULL
-                              AND e.predict_winner::int = e.result::int
-                          ) AS hit
-                        FROM ai_eval e
-                        INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
-                        WHERE COALESCE(e.if_bet, 0) = 1 AND e.confidence > 0.6
-                        """
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT
-                          COUNT(*) FILTER (
-                            WHERE e.result IS NOT NULL
-                          ) AS total,
-                          COUNT(*) FILTER (
-                            WHERE e.result IS NOT NULL
-                              AND e.predict_winner::int = e.result::int
-                          ) AS hit
-                        FROM ai_eval e
-                        INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
-                        WHERE COALESCE(e.if_bet, 0) = 1 AND e.confidence > 0.6
-                          AND f.fixture_date >= %s AND f.fixture_date < %s
-                        """,
-                        (start_utc, end_utc),
-                    )
-                row = cur.fetchone() or (0, 0)
-                total, hit = row
-                return (hit * 100.0 / total) if total and total > 0 else 0.0
-            acc_all = _stats(start_utc_all, end_utc_all)
-            acc_7d = _stats(start_utc_7d, end_utc_7d)
-            acc_1d = _stats(start_utc_1d, end_utc_1d)
-            def _recent(start_utc, end_utc, limit=10):
-                if start_utc is None and end_utc is None:
-                    cur.execute(
-                        """
-                        SELECT e.predict_winner, e.result
-                        FROM ai_eval e
-                        INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
-                        WHERE COALESCE(e.if_bet, 0) = 1 AND e.confidence > 0.6
-                        ORDER BY f.fixture_date DESC
-                        LIMIT %s
-                        """,
-                        (limit,),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT e.predict_winner, e.result
-                        FROM ai_eval e
-                        INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
-                        WHERE COALESCE(e.if_bet, 0) = 1 AND e.confidence > 0.6
-                          AND f.fixture_date >= %s AND f.fixture_date < %s
-                        ORDER BY f.fixture_date DESC
-                        LIMIT %s
-                        """,
-                        (start_utc, end_utc, limit),
-                    )
-                rows = cur.fetchall() or []
-                syms = []
-                for (pred, res) in rows:
-                    if res is None:
-                        syms.append('➖')
-                    else:
-                        try:
-                            ok = int(pred) == int(res)
-                        except Exception:
-                            ok = False
-                        syms.append('✅' if ok else '❌')
-                return ''.join(syms) if syms else '暂无'
-            if scope == '7d':
-                recent_line = _recent(start_utc_7d, end_utc_7d)
-            elif scope == '1d':
-                recent_line = _recent(start_utc_1d, end_utc_1d)
-            else:
-                recent_line = _recent(start_utc_all, end_utc_all)
-    return (
-        f"📊 AI历史预测准确率: {acc_all:.1f}%\n"
-        f"📆 AI7天内预测准确率: {acc_7d:.1f}%\n"
-        f"🗓️ AI昨日预测准确率: {acc_1d:.1f}%\n\n"
-        f"AI最近10场预测:\n{recent_line}"
-    )
-
 def _extract_external_id(body: dict):
     b = body or {}
     data = b.get("data") or b.get("payload") or b
@@ -681,18 +559,6 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                         )
                 except Exception:
                     logger.exception("AI pick reply error")
-            if _is_ai_history_command(content):
-                try:
-                    scope = _parse_history_scope(content)
-                    reply = _ai_history_reply(body, scope)
-                    acc_id_int = _to_int(account_id)
-                    conv_id_int = _to_int(conversation_id)
-                    if acc_id_int is not None and conv_id_int is not None:
-                        background_tasks.add_task(
-                            send_chatwoot_reply, acc_id_int, conv_id_int, reply
-                        )
-                except Exception:
-                    logger.exception("AI history reply error")
         if _is_start_command(content) and message_type == "incoming":
             acc_id_int = _to_int(account_id)
             conv_id_int = _to_int(conversation_id)
