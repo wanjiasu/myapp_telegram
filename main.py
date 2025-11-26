@@ -6,6 +6,7 @@ import psycopg
 import json
 import re
 from datetime import datetime, timedelta, timezone
+import asyncio
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -109,6 +110,22 @@ def init_db() -> None:
                         home_name TEXT,
                         away_name TEXT
                     )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS push_log (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+                        push_date DATE NOT NULL,
+                        push_type TEXT NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uniq_push_log ON push_log(user_id, push_date, push_type)
                     """
                 )
                 conn.commit()
@@ -283,6 +300,28 @@ def send_telegram_country_keyboard(chatroom_id_raw) -> None:
             logger.error(f"Telegram keyboard failed: {resp.status_code} {resp.text[:200]}")
     except Exception:
         logger.exception("Telegram keyboard error")
+
+def send_telegram_message(chatroom_id_raw, text: str) -> None:
+    token = _telegram_token()
+    if not token or chatroom_id_raw is None or not text:
+        return
+    chat_id = None
+    try:
+        if isinstance(chatroom_id_raw, int):
+            chat_id = chatroom_id_raw
+        else:
+            m = re.search(r"-?\d+", str(chatroom_id_raw))
+            chat_id = int(m.group(0)) if m else None
+    except Exception:
+        chat_id = None
+    if chat_id is None:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception:
+        logger.exception("Telegram sendMessage error")
 
 def _telegram_webhook_url() -> str:
     return os.getenv("TELEGRAM_WEBHOOK_URL", "")
@@ -599,8 +638,134 @@ def _ai_yesterday_reply(body: dict) -> str:
     body_text = "\n".join(lines)
     return f"📊 AI昨日预测准确率: {acc:.1f}%\n\n{body_text}"
 
+def _ai_yesterday_text_for_country(country: str) -> str:
+    offset = _read_offset(country) if country else 0
+    now_utc = datetime.now(timezone.utc)
+    local_now = now_utc + timedelta(hours=offset)
+    local_today = datetime(local_now.year, local_now.month, local_now.day, tzinfo=timezone.utc)
+    today_start_utc = local_today - timedelta(hours=offset)
+    yesterday_start = today_start_utc - timedelta(days=1)
+    yesterday_end = today_start_utc
+    rows = []
+    acc = 0.0
+    try:
+        with psycopg.connect(_pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT e.fixture_id,
+                           e.predict_winner,
+                           e.result,
+                           e.confidence,
+                           f.fixture_date,
+                           f.home_name,
+                           f.away_name,
+                           CASE WHEN e.predict_winner ~ '^-?\\d+$' AND e.result ~ '^-?\\d+$' AND (e.predict_winner)::int = (e.result)::int THEN 1 ELSE 0 END AS success
+                    FROM ai_eval e
+                    INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
+                    WHERE COALESCE(e.if_bet, 0) = 1
+                      AND e.confidence > 0.6
+                      AND e.result IS NOT NULL
+                      AND f.fixture_date >= %s AND f.fixture_date < %s
+                    ORDER BY f.fixture_date ASC
+                    """,
+                    (yesterday_start, yesterday_end),
+                )
+                fetched = cur.fetchall() or []
+                rows = [
+                    {
+                        "home_name": r[5],
+                        "away_name": r[6],
+                        "success": r[7],
+                    }
+                    for r in fetched
+                ]
+                cur.execute(
+                    """
+                    SELECT COALESCE(ROUND(
+                               SUM(CASE WHEN e.predict_winner ~ '^-?\\d+$' AND e.result ~ '^-?\\d+$' AND (e.predict_winner)::int = (e.result)::int THEN 1 ELSE 0 END)::numeric
+                               / NULLIF(COUNT(1), 0) * 100, 1
+                           ), 0.0) AS acc
+                    FROM ai_eval e
+                    INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
+                    WHERE COALESCE(e.if_bet, 0) = 1
+                      AND e.confidence > 0.6
+                      AND e.result IS NOT NULL
+                      AND f.fixture_date >= %s AND f.fixture_date < %s
+                    """,
+                    (yesterday_start, yesterday_end),
+                )
+                row_acc = cur.fetchone()
+                acc = float(row_acc[0]) if row_acc and row_acc[0] is not None else 0.0
+    except Exception:
+        logger.exception("DB fetch ai_yesterday country error")
+    if not rows:
+        return "昨天暂无AI记录，可以稍后再试哦～"
+    lines = []
+    for i, r in enumerate(rows, 1):
+        emoji = "✅" if bool(r.get("success")) else "❌"
+        lines.append(f"{i}. {r.get('home_name')} vs {r.get('away_name')} {emoji}")
+    body_text = "\n".join(lines)
+    return f"📊 AI昨日预测准确率: {acc:.1f}%\n\n{body_text}"
+
 def _ai_pick_reply(body: dict) -> str:
     country = _get_country_for_chat(body)
+    offset = _read_offset(country) if country else 0
+    now_utc = datetime.now(timezone.utc)
+    local = now_utc + timedelta(hours=offset)
+    local_day = datetime(local.year, local.month, local.day, tzinfo=timezone.utc)
+    tomorrow_local_day = local_day + timedelta(days=1)
+    start_utc = tomorrow_local_day - timedelta(hours=offset)
+    end_utc = start_utc + timedelta(days=1)
+    rows = []
+    with psycopg.connect(_pg_dsn()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
+                       f.fixture_date, f.home_name, f.away_name
+                FROM ai_eval e
+                INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
+                WHERE COALESCE(e.if_bet, 0) = 1
+                  AND e.confidence > 0.6
+                  AND f.fixture_date >= %s AND f.fixture_date < %s
+                ORDER BY f.fixture_date ASC
+                """,
+                (start_utc, end_utc),
+            )
+            rows = cur.fetchall() or []
+    if not rows:
+        return "明天暂无AI精选比赛，稍后再试试。"
+    out = []
+    for i, r in enumerate(rows, 1):
+        fixture_id, predict_winner, confidence, key_tag_evidence, fixture_date, home_name, away_name = r
+        when_local = fixture_date + timedelta(hours=offset) if fixture_date else None
+        when_str = when_local.strftime("%Y-%m-%d %H:%M") if when_local else ""
+        tags = _format_tags(key_tag_evidence)
+        pw = str(predict_winner).strip().lower() if predict_winner is not None else ""
+        if pw in ("3", "home", "主胜", "h"):
+            result_label = "主胜"
+        elif pw in ("1", "draw", "平局", "主平", "d"):
+            result_label = "主平"
+        elif pw in ("0", "away", "客胜", "a"):
+            result_label = "客胜"
+        else:
+            result_label = str(predict_winner)
+        try:
+            confidence_pct = f"{round(float(confidence) * 100)}%"
+        except Exception:
+            confidence_pct = str(confidence)
+        block = (
+            f"⚽️ 第{i}场: {home_name} vs {away_name}\n"
+            f"🕒 比赛时间: {when_str}\n"
+            f"🏆 预测结果: {result_label}\n"
+            f"🎯 把握: {confidence_pct}\n"
+            f"💡 核心观点: {tags}"
+        )
+        out.append(block)
+    return "\n\n".join(out)
+
+def _ai_pick_text_for_country(country: str) -> str:
     offset = _read_offset(country) if country else 0
     now_utc = datetime.now(timezone.utc)
     local = now_utc + timedelta(hours=offset)
@@ -846,6 +1011,7 @@ async def health():
 @app.on_event("startup")
 async def on_startup():
     init_db()
+    asyncio.create_task(run_daily_push_scheduler())
 
 @app.post("/webhooks/telegram")
 async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
@@ -868,6 +1034,96 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
             background_tasks.add_task(set_user_country, body, data)
             background_tasks.add_task(answer_callback_query, token, cb.get("id"), "已记录选择")
     return {"status": "ok"}
+
+def _list_users_for_push():
+    try:
+        with psycopg.connect(_pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, chatroom_id, country
+                    FROM users
+                    WHERE chatroom_id IS NOT NULL AND country IS NOT NULL
+                    """
+                )
+                return cur.fetchall() or []
+    except Exception:
+        logger.exception("List users for push error")
+        return []
+
+def _has_pushed(user_id: int, push_date: datetime, push_type: str) -> bool:
+    try:
+        with psycopg.connect(_pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1 FROM push_log
+                    WHERE user_id = %s AND push_date = %s AND push_type = %s
+                    LIMIT 1
+                    """,
+                    (int(user_id), push_date.date(), push_type),
+                )
+                return bool(cur.fetchone())
+    except Exception:
+        return False
+
+def _mark_pushed(user_id: int, push_date: datetime, push_type: str) -> None:
+    try:
+        with psycopg.connect(_pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO push_log (user_id, push_date, push_type)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, push_date, push_type) DO NOTHING
+                    """,
+                    (int(user_id), push_date.date(), push_type),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Mark pushed error")
+
+def _push_yesterday(user_row) -> None:
+    try:
+        user_id, chatroom_id, country = user_row
+        text = _ai_yesterday_text_for_country(country)
+        if text:
+            send_telegram_message(chatroom_id, text)
+    except Exception:
+        logger.exception("Push yesterday error")
+
+def _push_pick(user_row) -> None:
+    try:
+        user_id, chatroom_id, country = user_row
+        text = _ai_pick_text_for_country(country)
+        if text:
+            send_telegram_message(chatroom_id, text)
+    except Exception:
+        logger.exception("Push pick error")
+
+async def run_daily_push_scheduler():
+    while True:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            users = _list_users_for_push()
+            for row in users:
+                try:
+                    user_id, chatroom_id, country = row
+                    offset = _read_offset(country) if country else 0
+                    local_now = now_utc + timedelta(hours=offset)
+                    if local_now.hour == 11 and local_now.minute == 0:
+                        if not _has_pushed(user_id, local_now, "yesterday"):
+                            _push_yesterday(row)
+                            _mark_pushed(user_id, local_now, "yesterday")
+                    if local_now.hour == 20 and local_now.minute == 0:
+                        if not _has_pushed(user_id, local_now, "pick"):
+                            _push_pick(row)
+                            _mark_pushed(user_id, local_now, "pick")
+                except Exception:
+                    logger.exception("Daily push per-user error")
+        except Exception:
+            logger.exception("Daily push scheduler error")
+        await asyncio.sleep(60)
 
 def _lark_webhook_url() -> str:
     return os.getenv("LARK_BOT_WEBHOOK_URL", "")
