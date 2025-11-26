@@ -649,7 +649,14 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                 acc_id_int = _to_int(account_id)
                 conv_id_int = _to_int(conversation_id)
                 if acc_id_int is not None and conv_id_int is not None:
-                    ack = "已选择菲律宾" if choice == "PH" else "已选择美国"
+                    ack = (
+                        ("已选择菲律宾" if choice == "PH" else "已选择美国")
+                        + "\n\n"
+                        + "👇 可以点击左下方 menu 或直接发送以下指令\n"
+                        + "🤖 /ai_pick - 查看 AI 今日推荐\n"
+                        + "📊 /ai_history - 查看 AI 历史记录\n"
+                        + "🆘 /help - 寻求人工客服协助"
+                    )
                     background_tasks.add_task(
                         send_chatwoot_reply, acc_id_int, conv_id_int, ack
                     )
