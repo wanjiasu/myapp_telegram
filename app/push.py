@@ -15,9 +15,10 @@ def _list_users_for_push():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, chatroom_id, country
+                    SELECT DISTINCT ON (chatroom_id) id, chatroom_id, country
                     FROM users
                     WHERE chatroom_id IS NOT NULL AND country IS NOT NULL
+                    ORDER BY chatroom_id, updated_at DESC, id DESC
                     """
                 )
                 return cur.fetchall() or []
@@ -57,6 +58,28 @@ def _mark_pushed(user_id: int, push_date: datetime, push_type: str) -> None:
     except Exception:
         logger.exception("Mark pushed error")
 
+def _claim_push(user_id: int, push_date: datetime, push_type: str) -> bool:
+    try:
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO push_log (user_id, push_date, push_type)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, push_date, push_type) DO NOTHING
+                    RETURNING id
+                    """,
+                    (int(user_id), push_date.date(), push_type),
+                )
+                row = cur.fetchone()
+                if row:
+                    conn.commit()
+                    return True
+                return False
+    except Exception:
+        logger.exception("Claim push error")
+        return False
+
 def _push_yesterday(user_row) -> None:
     try:
         user_id, chatroom_id, country = user_row
@@ -86,13 +109,11 @@ async def run_daily_push_scheduler():
                     offset = read_offset(country) if country else 0
                     local_now = now_utc + timedelta(hours=offset)
                     if local_now.hour == 11 and local_now.minute == 0:
-                        if not _has_pushed(user_id, local_now, "yesterday"):
+                        if _claim_push(user_id, local_now, "yesterday"):
                             _push_yesterday(row)
-                            _mark_pushed(user_id, local_now, "yesterday")
                     if local_now.hour == 20 and local_now.minute == 0:
-                        if not _has_pushed(user_id, local_now, "pick"):
+                        if _claim_push(user_id, local_now, "pick"):
                             _push_pick(row)
-                            _mark_pushed(user_id, local_now, "pick")
                 except Exception:
                     logger.exception("Daily push per-user error")
         except Exception:
