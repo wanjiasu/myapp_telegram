@@ -277,7 +277,7 @@ def ai_pick_reply(body: dict) -> str:
     local = now_utc + timedelta(hours=offset)
     local_day = datetime(local.year, local.month, local.day, tzinfo=timezone.utc)
     tomorrow_local_day = local_day + timedelta(days=1)
-    start_utc = local
+    start_utc = now_utc
     end_utc = tomorrow_local_day - timedelta(hours=offset) + timedelta(days=2)
     logger.info(f"ai_pick_reply country={country} offset={offset} start_utc={start_utc} end_utc={end_utc}")
     rows = []
@@ -337,7 +337,7 @@ def ai_pick_text_for_country(country: str) -> str:
     local = now_utc + timedelta(hours=offset)
     local_day = datetime(local.year, local.month, local.day, tzinfo=timezone.utc)
     tomorrow_local_day = local_day + timedelta(days=1)
-    start_utc = local
+    start_utc = now_utc
     end_utc = tomorrow_local_day - timedelta(hours=offset) + timedelta(days=2)
     logger.info(f"ai_pick_text_for_country country={country} offset={offset} start_utc={start_utc} end_utc={end_utc}")
     rows = []
