@@ -70,16 +70,23 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                     acc_id_int = to_int(account_id)
                     conv_id_int = to_int(conversation_id)
                     if acc_id_int is not None and conv_id_int is not None:
-                        if isinstance(reply, str) and len(reply) > 3500:
-                            parts = []
-                            text = reply
-                            while text:
-                                parts.append(text[:3000])
-                                text = text[3000:]
-                            for p in parts:
-                                send_chatwoot_reply(acc_id_int, conv_id_int, p)
+                        if isinstance(reply, list):
+                            for seg in reply:
+                                if isinstance(seg, str) and len(seg) > 3500:
+                                    t = seg
+                                    while t:
+                                        send_chatwoot_reply(acc_id_int, conv_id_int, t[:3000])
+                                        t = t[3000:]
+                                else:
+                                    send_chatwoot_reply(acc_id_int, conv_id_int, seg)
                         else:
-                            send_chatwoot_reply(acc_id_int, conv_id_int, reply)
+                            if isinstance(reply, str) and len(reply) > 3500:
+                                t = reply
+                                while t:
+                                    send_chatwoot_reply(acc_id_int, conv_id_int, t[:3000])
+                                    t = t[3000:]
+                            else:
+                                send_chatwoot_reply(acc_id_int, conv_id_int, reply)
                 except Exception:
                     logger.exception("AI pick reply error")
             if is_ai_history_command(content):
@@ -174,7 +181,11 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
             try:
                 hint = {"data": {"message": {"additional_attributes": {"chat_id": chat_id}}}}
                 reply = ai_pick_reply(hint)
-                background_tasks.add_task(send_telegram_message, chat_id, reply)
+                if isinstance(reply, list):
+                    for seg in reply:
+                        background_tasks.add_task(send_telegram_message, chat_id, seg)
+                else:
+                    background_tasks.add_task(send_telegram_message, chat_id, reply)
             except Exception:
                 logger.exception("Telegram AI pick reply error")
         if is_ai_history_command(text) and chat_id is not None:

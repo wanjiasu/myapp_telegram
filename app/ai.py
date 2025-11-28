@@ -326,13 +326,18 @@ def ai_pick_reply(body: dict) -> str:
             f"🏆 预测结果: {result_label}\n"
             f"🎯 把握: {confidence_pct}\n"
             f"💡 核心观点: {tags}\n"
-            odds_line = ""
-            if home_odd != "未找到赔率" and draw_odd != "未找到赔率" and away_odd != "未找到赔率":
-                odds_line = f"💰 赔率: 主胜{home_odd} - 平局{draw_odd} - 客胜{away_odd}\n"
             f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}"
         )
         out.append(block)
-    return "\n\n".join(out)
+    if not out:
+        return "明天暂无AI精选比赛，稍后再试试。"
+    chunks = []
+    i = 0
+    n = len(out)
+    while i < n:
+        chunks.append("\n\n".join(out[i:i+8]))
+        i += 8
+    return chunks[0] if len(chunks) == 1 else chunks
 
 def ai_pick_text_for_country(country: str) -> str:
     offset = read_offset(country) if country else 0
@@ -390,4 +395,12 @@ def ai_pick_text_for_country(country: str) -> str:
             f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}"
         )
         out.append(block)
-    return "\n\n".join(out)
+    if not out:
+        return "暂无AI精选比赛，稍后再试试。"
+    chunks = []
+    i = 0
+    n = len(out)
+    while i < n:
+        chunks.append("\n\n".join(out[i:i+8]))
+        i += 8
+    return chunks[0] if len(chunks) == 1 else chunks

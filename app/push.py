@@ -94,7 +94,12 @@ def _push_pick(user_row) -> None:
         user_id, chatroom_id, country = user_row
         text = ai_pick_text_for_country(country)
         if text:
-            send_telegram_message(chatroom_id, text)
+            if isinstance(text, list):
+                for seg in text:
+                    if seg:
+                        send_telegram_message(chatroom_id, seg)
+            else:
+                send_telegram_message(chatroom_id, text)
     except Exception:
         logger.exception("Push pick error")
 
