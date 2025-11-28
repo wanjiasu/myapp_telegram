@@ -278,7 +278,7 @@ def ai_pick_reply(body: dict) -> str:
     local_day = datetime(local.year, local.month, local.day, tzinfo=timezone.utc)
     tomorrow_local_day = local_day + timedelta(days=1)
     start_utc = now_utc
-    end_utc = tomorrow_local_day - timedelta(hours=offset) + timedelta(days=2)
+    end_utc = tomorrow_local_day - timedelta(hours=offset) + timedelta(days=1)
     logger.info(f"ai_pick_reply country={country} offset={offset} start_utc={start_utc} end_utc={end_utc}")
     rows = []
     with psycopg.connect(pg_dsn()) as conn:
@@ -338,7 +338,7 @@ def ai_pick_text_for_country(country: str) -> str:
     local_day = datetime(local.year, local.month, local.day, tzinfo=timezone.utc)
     tomorrow_local_day = local_day + timedelta(days=1)
     start_utc = now_utc
-    end_utc = tomorrow_local_day - timedelta(hours=offset) + timedelta(days=2)
+    end_utc = tomorrow_local_day - timedelta(hours=offset) + timedelta(days=1)
     logger.info(f"ai_pick_text_for_country country={country} offset={offset} start_utc={start_utc} end_utc={end_utc}")
     rows = []
     with psycopg.connect(pg_dsn()) as conn:
