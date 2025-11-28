@@ -1,4 +1,5 @@
 import logging
+import re
 import psycopg
 from datetime import datetime, timedelta, timezone
 from .db import pg_dsn
@@ -6,6 +7,25 @@ from .config import read_offset
 from .utils import format_tags
 
 logger = logging.getLogger(__name__)
+
+def _fmt_odd(x):
+    try:
+        if x is None:
+            return None
+        s = str(x).strip()
+        if not s or s in ("未找到赔率",):
+            return None
+        try:
+            v = float(s)
+            return f"{v:.2f}"
+        except Exception:
+            m = re.search(r"-?\d+(?:\.\d+)?", s)
+            if not m:
+                return None
+            v = float(m.group(0))
+            return f"{v:.2f}"
+    except Exception:
+        return None
 
 def get_country_for_chat(body: dict) -> str:
     b = body or {}
@@ -359,8 +379,11 @@ def ai_pick_reply(body: dict) -> str:
             f"🎯 把握: {confidence_pct}",
             f"💡 核心观点: {tags}",
         ]
-        if home_odd and draw_odd and away_odd and all(str(x) not in ("", "未找到赔率") for x in (home_odd, draw_odd, away_odd)):
-            lines.append(f"💰 赔率: 主胜{home_odd} - 平局{draw_odd} - 客胜{away_odd}")
+        h = _fmt_odd(home_odd)
+        d = _fmt_odd(draw_odd)
+        a = _fmt_odd(away_odd)
+        if h and d and a:
+            lines.append(f"💰 赔率: 主胜{h} - 平局{d} - 客胜{a}")
         lines.append(f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}")
         out.append("\n".join(lines))
     if not out:
@@ -463,8 +486,11 @@ def ai_pick_text_for_country(country: str) -> str:
             f"🎯 把握: {confidence_pct}",
             f"💡 核心观点: {tags}",
         ]
-        if home_odd and draw_odd and away_odd and all(str(x) not in ("", "未找到赔率") for x in (home_odd, draw_odd, away_odd)):
-            lines.append(f"💰 赔率: 主胜{home_odd} - 平局{draw_odd} - 客胜{away_odd}")
+        h = _fmt_odd(home_odd)
+        d = _fmt_odd(draw_odd)
+        a = _fmt_odd(away_odd)
+        if h and d and a:
+            lines.append(f"💰 赔率: 主胜{h} - 平局{d} - 客胜{a}")
         lines.append(f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}")
         out.append("\n".join(lines))
     if not out:
