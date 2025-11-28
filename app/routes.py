@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from .config import chatwoot_base_url, chatwoot_token, telegram_token
 from .db import pg_dsn
 from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int
-from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert
+from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message
 from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply
 
 logger = logging.getLogger(__name__)

@@ -283,27 +283,59 @@ def ai_pick_reply(body: dict) -> str:
     rows = []
     with psycopg.connect(pg_dsn()) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
-                       f.fixture_date, f.home_name, f.away_name, e.home_odd, e.away_odd, e.draw_odd
-                FROM ai_eval e
-                INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
-                WHERE COALESCE(e.if_bet, 0) = 1
-                  AND e.confidence > 0.6
-                  AND f.fixture_date >= %s AND f.fixture_date < %s
-                ORDER BY f.fixture_date ASC
-                """,
-                (start_utc, end_utc),
-            )
-            rows = cur.fetchall() or []
+            try:
+                cur.execute(
+                    """
+                    SELECT e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
+                           f.fixture_date, f.home_name, f.away_name, e.home_odd, e.away_odd, e.draw_odd
+                    FROM ai_eval e
+                    INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
+                    WHERE COALESCE(e.if_bet, 0) = 1
+                      AND e.confidence > 0.6
+                      AND f.fixture_date >= %s AND f.fixture_date < %s
+                    ORDER BY f.fixture_date ASC
+                    """,
+                    (start_utc, end_utc),
+                )
+                rows = cur.fetchall() or []
+            except psycopg.errors.UndefinedColumn:
+                logger.warning("ai_pick_reply odds columns missing, fallback without odds")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(
+                    """
+                    SELECT e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
+                           f.fixture_date, f.home_name, f.away_name
+                    FROM ai_eval e
+                    INNER JOIN api_football_fixtures f ON f.fixture_id = e.fixture_id
+                    WHERE COALESCE(e.if_bet, 0) = 1
+                      AND e.confidence > 0.6
+                      AND f.fixture_date >= %s AND f.fixture_date < %s
+                    ORDER BY f.fixture_date ASC
+                    """,
+                    (start_utc, end_utc),
+                )
+                rows = cur.fetchall() or []
     logger.info(f"ai_pick_reply fetched_rows={len(rows)}")
     if not rows:
         logger.warning(f"ai_pick_reply no rows for window start={start_utc} end={end_utc} offset={offset}")
         return "明天暂无AI精选比赛，稍后再试试。"
     out = []
     for i, r in enumerate(rows, 1):
-        fixture_id, predict_winner, confidence, key_tag_evidence, fixture_date, home_name, away_name = r
+        fixture_id = r[0]
+        predict_winner = r[1]
+        confidence = r[2]
+        key_tag_evidence = r[3]
+        fixture_date = r[4]
+        home_name = r[5]
+        away_name = r[6]
+        home_odd = draw_odd = away_odd = None
+        if len(r) >= 10:
+            home_odd = r[7]
+            away_odd = r[8]
+            draw_odd = r[9]
         when_local = fixture_date + timedelta(hours=offset) if fixture_date else None
         when_str = when_local.strftime("%Y-%m-%d %H:%M") if when_local else ""
         tags = format_tags(key_tag_evidence)
@@ -320,15 +352,17 @@ def ai_pick_reply(body: dict) -> str:
             confidence_pct = f"{round(float(confidence) * 100)}%"
         except Exception:
             confidence_pct = str(confidence)
-        block = (
-            f"⚽️ 第{i}场: {home_name} vs {away_name}\n"
-            f"🕒 比赛时间: {when_str}\n"
-            f"🏆 预测结果: {result_label}\n"
-            f"🎯 把握: {confidence_pct}\n"
-            f"💡 核心观点: {tags}\n"
-            f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}"
-        )
-        out.append(block)
+        lines = [
+            f"⚽️ 第{i}场: {home_name} vs {away_name}",
+            f"🕒 比赛时间: {when_str}",
+            f"🏆 预测结果: {result_label}",
+            f"🎯 把握: {confidence_pct}",
+            f"💡 核心观点: {tags}",
+        ]
+        if home_odd and draw_odd and away_odd and all(str(x) not in ("", "未找到赔率") for x in (home_odd, draw_odd, away_odd)):
+            lines.append(f"💰 赔率: 主胜{home_odd} - 平局{draw_odd} - 客胜{away_odd}")
+        lines.append(f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}")
+        out.append("\n".join(lines))
     if not out:
         return "明天暂无AI精选比赛，稍后再试试。"
     chunks = []
@@ -351,25 +385,61 @@ def ai_pick_text_for_country(country: str) -> str:
     rows = []
     with psycopg.connect(pg_dsn()) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                select e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
-                       f.fixture_date, f.home_name, f.away_name
-                from (select fixture_id, predict_winner, confidence, key_tag_evidence from ai_eval where if_bet = 1 and confidence > 0.6) e
-                inner join
-                (select fixture_id, fixture_date, home_name, away_name from api_football_fixtures where fixture_date >= %s and fixture_date < %s) f
-                on e.fixture_id = f.fixture_id
-                """,
-                (start_utc, end_utc),
-            )
-            rows = cur.fetchall() or []
+            try:
+                cur.execute(
+                    """
+                    select e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
+                           f.fixture_date, f.home_name, f.away_name, e.home_odd, e.away_odd, e.draw_odd
+                    from (
+                        select fixture_id, predict_winner, confidence, key_tag_evidence, home_odd, away_odd, draw_odd
+                        from ai_eval where if_bet = 1 and confidence > 0.6
+                    ) e
+                    inner join (
+                        select fixture_id, fixture_date, home_name, away_name
+                        from api_football_fixtures where fixture_date >= %s and fixture_date < %s
+                    ) f on e.fixture_id = f.fixture_id
+                    """,
+                    (start_utc, end_utc),
+                )
+                rows = cur.fetchall() or []
+            except psycopg.errors.UndefinedColumn:
+                logger.warning("ai_pick_text_for_country odds columns missing, fallback without odds")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                cur.execute(
+                    """
+                    select e.fixture_id, e.predict_winner, e.confidence, e.key_tag_evidence,
+                           f.fixture_date, f.home_name, f.away_name
+                    from (
+                        select fixture_id, predict_winner, confidence, key_tag_evidence
+                        from ai_eval where if_bet = 1 and confidence > 0.6
+                    ) e
+                    inner join (
+                        select fixture_id, fixture_date, home_name, away_name
+                        from api_football_fixtures where fixture_date >= %s and fixture_date < %s
+                    ) f on e.fixture_id = f.fixture_id
+                    """,
+                    (start_utc, end_utc),
+                )
+                rows = cur.fetchall() or []
     logger.info(f"ai_pick_text_for_country fetched_rows={len(rows)}")
     if not rows:
         logger.warning(f"ai_pick_text_for_country no rows for window start={start_utc} end={end_utc} offset={offset}")
         return "暂无AI精选比赛，稍后再试试。"
     out = []
     for i, r in enumerate(rows, 1):
-        fixture_id, predict_winner, confidence, key_tag_evidence, fixture_date, home_name, away_name = r
+        fixture_id = r[0]
+        predict_winner = r[1]
+        confidence = r[2]
+        key_tag_evidence = r[3]
+        fixture_date = r[4]
+        home_name = r[5]
+        away_name = r[6]
+        home_odd = draw_odd = away_odd = None
+        if len(r) >= 10:
+            home_odd, draw_odd, away_odd = r[7], r[8], r[9]
         when_local = fixture_date + timedelta(hours=offset) if fixture_date else None
         when_str = when_local.strftime("%Y-%m-%d %H:%M") if when_local else ""
         tags = format_tags(key_tag_evidence)
@@ -386,15 +456,17 @@ def ai_pick_text_for_country(country: str) -> str:
             confidence_pct = f"{round(float(confidence) * 100)}%"
         except Exception:
             confidence_pct = str(confidence)
-        block = (
-            f"⚽️ 第{i}场: {home_name} vs {away_name}\n"
-            f"🕒 比赛时间: {when_str}\n"
-            f"🏆 预测结果: {result_label}\n"
-            f"🎯 把握: {confidence_pct}\n"
-            f"💡 核心观点: {tags}\n"
-            f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}"
-        )
-        out.append(block)
+        lines = [
+            f"⚽️ 第{i}场: {home_name} vs {away_name}",
+            f"🕒 比赛时间: {when_str}",
+            f"🏆 预测结果: {result_label}",
+            f"🎯 把握: {confidence_pct}",
+            f"💡 核心观点: {tags}",
+        ]
+        if home_odd and draw_odd and away_odd and all(str(x) not in ("", "未找到赔率") for x in (home_odd, draw_odd, away_odd)):
+            lines.append(f"💰 赔率: 主胜{home_odd} - 平局{draw_odd} - 客胜{away_odd}")
+        lines.append(f"🔗 更多详情: https://betaione.com/fixture/{fixture_id}")
+        out.append("\n".join(lines))
     if not out:
         return "暂无AI精选比赛，稍后再试试。"
     chunks = []
