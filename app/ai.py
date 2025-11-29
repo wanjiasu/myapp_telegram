@@ -171,7 +171,7 @@ def ai_yesterday_reply(body: dict) -> str:
                       AND e.confidence > 0.6
                       AND e.result IS NOT NULL
                       AND f.fixture_date >= %s AND f.fixture_date < %s
-                    ORDER BY f.fixture_date ASC
+                    ORDER BY e.confidence DESC, f.fixture_date ASC
                     """,
                     (yesterday_start, yesterday_end),
                 )
@@ -251,7 +251,7 @@ def ai_yesterday_text_for_country(country: str) -> str:
                       AND e.confidence > 0.6
                       AND e.result IS NOT NULL
                       AND f.fixture_date >= %s AND f.fixture_date < %s
-                    ORDER BY f.fixture_date ASC
+                    ORDER BY e.confidence DESC, f.fixture_date ASC
                     """,
                     (yesterday_start, yesterday_end),
                 )
@@ -422,6 +422,7 @@ def ai_pick_text_for_country(country: str) -> str:
                         select fixture_id, fixture_date, home_name, away_name
                         from api_football_fixtures where fixture_date >= %s and fixture_date < %s
                     ) f on e.fixture_id = f.fixture_id
+                    order by e.confidence desc, f.fixture_date asc
                     """,
                     (start_utc, end_utc),
                 )
@@ -444,6 +445,7 @@ def ai_pick_text_for_country(country: str) -> str:
                         select fixture_id, fixture_date, home_name, away_name
                         from api_football_fixtures where fixture_date >= %s and fixture_date < %s
                     ) f on e.fixture_id = f.fixture_id
+                    order by e.confidence desc, f.fixture_date asc
                     """,
                     (start_utc, end_utc),
                 )
