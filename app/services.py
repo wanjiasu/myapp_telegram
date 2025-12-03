@@ -2,8 +2,8 @@ import logging
 import os
 import requests
 import psycopg
-from datetime import datetime, timezone
-from .config import chatwoot_base_url, chatwoot_token, telegram_token, telegram_webhook_url, allowed_account_inbox_pairs, agent_url, agent_name, agent_endpoint_path
+from datetime import datetime, timezone, timedelta
+from .config import chatwoot_base_url, chatwoot_token, telegram_token, telegram_webhook_url, allowed_account_inbox_pairs, agent_url, agent_name, agent_endpoint_path, thread_ttl_minutes_telegram, thread_ttl_minutes_chatwoot, thread_max_age_days
 from .db import pg_dsn
 from .utils import extract_chatwoot_fields, extract_chatroom_id, normalize_country, to_int
 
@@ -122,12 +122,127 @@ def answer_callback_query(token: str, callback_id: str, text: str = None) -> Non
     except Exception:
         logger.exception("Telegram answerCallbackQuery error")
 
-def post_agent_message(payload: dict, idempotency_key: str = None):
+def _get_thread_ttl_minutes(platform: str) -> int:
+    p = str(platform or "").strip().lower()
+    if p == "telegram":
+        return int(thread_ttl_minutes_telegram())
+    return int(thread_ttl_minutes_chatwoot())
+
+def find_active_thread(platform: str, chatroom_id: str):
+    try:
+        now = datetime.now(timezone.utc)
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT agent_thread_id, started_at, last_activity_at, expires_at
+                    FROM agent_threads
+                    WHERE platform = %s AND chatroom_id = %s AND status = 'active'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (str(platform or ""), str(chatroom_id or "")),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                tid, started_at, last_activity_at, expires_at = row
+                max_days = int(thread_max_age_days())
+                try:
+                    if started_at and (now - started_at).days >= max_days:
+                        return None
+                except Exception:
+                    pass
+                if expires_at and expires_at > now:
+                    return tid
+                return None
+    except Exception:
+        logger.exception("Find active thread error")
+        return None
+
+def _touch_thread(platform: str, chatroom_id: str, agent_thread_id: str) -> None:
+    try:
+        ttl_min = _get_thread_ttl_minutes(platform)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=int(ttl_min))
+    except Exception:
+        expires = datetime.now(timezone.utc)
+    try:
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE agent_threads
+                    SET last_activity_at = NOW(), expires_at = %s
+                    WHERE platform = %s AND chatroom_id = %s AND agent_thread_id = %s AND status = 'active'
+                    """,
+                    (expires, str(platform or ""), str(chatroom_id or ""), str(agent_thread_id or "")),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Touch thread error")
+
+def _create_remote_thread() -> str:
+    base = agent_url()
+    if not base:
+        return None
+    endpoint = f"{base}/threads"
+    headers = {"Content-Type": "application/json"}
+    try:
+        resp = requests.post(endpoint, json={}, headers=headers, timeout=10)
+        if resp.status_code >= 300:
+            return None
+        try:
+            data = resp.json()
+            tid = data.get("thread_id") or data.get("id")
+            return str(tid) if tid else None
+        except Exception:
+            return None
+    except Exception:
+        logger.exception("Create remote thread error")
+        return None
+
+def ensure_agent_thread(platform: str, chatroom_id: str) -> str:
+    tid = find_active_thread(platform, chatroom_id)
+    if tid:
+        _touch_thread(platform, chatroom_id, tid)
+        return tid
+    # create new
+    new_tid = _create_remote_thread()
+    if not new_tid:
+        return None
+    try:
+        ttl_min = _get_thread_ttl_minutes(platform)
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(minutes=int(ttl_min))
+    except Exception:
+        now = datetime.now(timezone.utc)
+        expires = now
+    try:
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO agent_threads (platform, chatroom_id, agent_thread_id, started_at, last_activity_at, expires_at, status)
+                    VALUES (%s, %s, %s, NOW(), NOW(), %s, 'active')
+                    """,
+                    (str(platform or ""), str(chatroom_id or ""), str(new_tid), expires),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Insert agent thread error")
+    return new_tid
+
+def post_agent_message(payload: dict, idempotency_key: str = None, thread_id: str = None):
     url = agent_url()
     if not url:
         return None
     endpoint_path = agent_endpoint_path()
-    endpoint = f"{url}{endpoint_path}"
+    if thread_id and "/runs" in endpoint_path:
+        suffix = "/runs/stream" if endpoint_path.endswith("/stream") else "/runs"
+        endpoint = f"{url}/threads/{thread_id}{suffix}"
+    else:
+        endpoint = f"{url}{endpoint_path}"
     headers = {"Content-Type": "application/json"}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
@@ -406,7 +521,14 @@ def forward_chatwoot_to_agent(body: dict) -> None:
                 send_chatwoot_reply(acc_id_int, conv_id_int, "小助手正在加紧思考ing, 请稍后...", inbox_id_int)
             except Exception:
                 pass
-        result = post_agent_message(payload, idempotency_key)
+        thread_key = chatroom_id_raw or conversation_id
+        tid = ensure_agent_thread("chatwoot", str(thread_key)) if thread_key is not None else None
+        if tid:
+            try:
+                payload["metadata"]["thread_id"] = tid
+            except Exception:
+                pass
+        result = post_agent_message(payload, idempotency_key, thread_id=tid)
         if not result:
             return
         reply = result.get("reply")
@@ -483,7 +605,13 @@ def forward_telegram_to_agent(body: dict) -> None:
             },
         }
         idempotency_key = f"telegram:{message_id}" if message_id is not None else None
-        result = post_agent_message(payload, idempotency_key)
+        tid = ensure_agent_thread("telegram", str(chat_id)) if chat_id is not None else None
+        if tid:
+            try:
+                payload["metadata"]["thread_id"] = tid
+            except Exception:
+                pass
+        result = post_agent_message(payload, idempotency_key, thread_id=tid)
         if not result:
             return
         reply = result.get("reply")

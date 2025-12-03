@@ -113,3 +113,30 @@ def agent_endpoint_path() -> str:
         return "/messages"
     except Exception:
         return "/messages"
+
+def thread_ttl_minutes_telegram() -> int:
+    try:
+        v = os.getenv("THREAD_TTL_MINUTES_TELEGRAM", "")
+        if v and str(v).strip():
+            return int(str(v).strip())
+    except Exception:
+        pass
+    return 30
+
+def thread_ttl_minutes_chatwoot() -> int:
+    try:
+        v = os.getenv("THREAD_TTL_MINUTES_CHATWOOT", "")
+        if v and str(v).strip():
+            return int(str(v).strip())
+    except Exception:
+        pass
+    return 720
+
+def thread_max_age_days() -> int:
+    try:
+        v = os.getenv("THREAD_MAX_AGE_DAYS", "")
+        if v and str(v).strip():
+            return int(str(v).strip())
+    except Exception:
+        pass
+    return 7

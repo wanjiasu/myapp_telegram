@@ -110,6 +110,37 @@ def init_db() -> None:
                     CREATE UNIQUE INDEX IF NOT EXISTS uniq_push_log ON push_log(user_id, push_date, push_type)
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_threads (
+                        id BIGSERIAL PRIMARY KEY,
+                        platform TEXT NOT NULL,
+                        chatroom_id TEXT NOT NULL,
+                        agent_thread_id TEXT NOT NULL,
+                        subject TEXT,
+                        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        last_activity_at TIMESTAMPTZ,
+                        expires_at TIMESTAMPTZ,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        metadata JSONB
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uniq_agent_thread_id ON agent_threads(agent_thread_id)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_agent_threads_active ON agent_threads(platform, chatroom_id, status)
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_agent_threads_expires ON agent_threads(expires_at)
+                    """
+                )
                 conn.commit()
     except Exception:
         logger.exception("DB init error")
