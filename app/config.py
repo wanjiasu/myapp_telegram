@@ -63,3 +63,38 @@ def allowed_account_inbox_pairs():
         return pairs
     except Exception:
         return set()
+
+def agent_url() -> str:
+    try:
+        s = os.getenv("agent_url", "") or os.getenv("AGENT_URL", "")
+        s = s.strip()
+        if s:
+            return s.rstrip("/")
+        base = os.path.dirname(os.path.dirname(__file__))
+        path = os.path.join(base, ".env")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        import re
+        m = re.search(r"agent_url\s*=\s*([^\s]+)", content)
+        if m:
+            return str(m.group(1)).strip().rstrip("/")
+    except Exception:
+        pass
+    return ""
+
+def agent_name() -> str:
+    try:
+        s = os.getenv("agent", "") or os.getenv("AGENT", "")
+        if s and s.strip():
+            return s.strip()
+        base = os.path.dirname(os.path.dirname(__file__))
+        path = os.path.join(base, ".env")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        import re
+        m = re.search(r"agent\s*=\s*([\w\-]+)", content)
+        if m:
+            return str(m.group(1)).strip()
+    except Exception:
+        pass
+    return ""

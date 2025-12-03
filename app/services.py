@@ -2,7 +2,8 @@ import logging
 import os
 import requests
 import psycopg
-from .config import chatwoot_base_url, chatwoot_token, telegram_token, telegram_webhook_url, allowed_account_inbox_pairs
+from datetime import datetime, timezone
+from .config import chatwoot_base_url, chatwoot_token, telegram_token, telegram_webhook_url, allowed_account_inbox_pairs, agent_url, agent_name
 from .db import pg_dsn
 from .utils import extract_chatwoot_fields, extract_chatroom_id, normalize_country, to_int
 
@@ -121,6 +122,118 @@ def answer_callback_query(token: str, callback_id: str, text: str = None) -> Non
     except Exception:
         logger.exception("Telegram answerCallbackQuery error")
 
+def post_agent_message(payload: dict, idempotency_key: str = None):
+    url = agent_url()
+    if not url:
+        return None
+    endpoint = f"{url}/agent_chat/message"
+    headers = {"Content-Type": "application/json"}
+    if idempotency_key:
+        headers["Idempotency-Key"] = idempotency_key
+    try:
+        resp = requests.post(endpoint, json=payload, headers=headers, timeout=10)
+        if resp.status_code >= 300:
+            return {"thread_id": None, "reply": "系统繁忙，请稍后再试。"}
+        try:
+            return resp.json()
+        except Exception:
+            return {"thread_id": None, "reply": "系统繁忙，请稍后再试。"}
+    except Exception:
+        logger.exception("Agent request error")
+        return {"thread_id": None, "reply": "系统繁忙，请稍后再试。"}
+
+def forward_chatwoot_to_agent(body: dict) -> None:
+    try:
+        content, message_type, conversation_id, account_id = extract_chatwoot_fields(body)
+        if message_type != "incoming":
+            return
+        b = body or {}
+        data = b.get("data") or b.get("payload") or b
+        message = data.get("message") or {}
+        sender = data.get("sender") or data.get("contact") or {}
+        username = sender.get("name") or data.get("name") or b.get("name")
+        chatroom_id_raw = extract_chatroom_id(body)
+        msg_id = data.get("id") or message.get("id")
+        inbox_id = (data.get("inbox_id") or message.get("inbox_id") or (data.get("conversation") or {}).get("inbox_id"))
+        payload = {
+            "platform": "chatwoot",
+            "agent": agent_name() or "query_agent",
+            "chatroom_id": chatroom_id_raw or conversation_id,
+            "thread_id": None,
+            "text": content or "",
+            "message_id": msg_id,
+            "sender_id": sender.get("id") or data.get("sender_id") or message.get("sender_id"),
+            "username": username,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "conversation_id": conversation_id,
+            "account_id": account_id,
+            "inbox_id": inbox_id,
+        }
+        idempotency_key = f"chatwoot:{msg_id}" if msg_id is not None else None
+        result = post_agent_message(payload, idempotency_key)
+        if not result:
+            return
+        reply = result.get("reply")
+        segments = result.get("segments")
+        acc_id_int = to_int(account_id)
+        conv_id_int = to_int(conversation_id)
+        inbox_id_int = to_int(inbox_id)
+        if acc_id_int is not None and conv_id_int is not None:
+            if isinstance(segments, list):
+                for seg in segments:
+                    if isinstance(seg, str) and len(seg) > 3500:
+                        t = seg
+                        while t:
+                            send_chatwoot_reply(acc_id_int, conv_id_int, t[:3000], inbox_id_int)
+                            t = t[3000:]
+                    else:
+                        send_chatwoot_reply(acc_id_int, conv_id_int, seg, inbox_id_int)
+            elif isinstance(reply, str):
+                if len(reply) > 3500:
+                    t = reply
+                    while t:
+                        send_chatwoot_reply(acc_id_int, conv_id_int, t[:3000], inbox_id_int)
+                        t = t[3000:]
+                else:
+                    send_chatwoot_reply(acc_id_int, conv_id_int, reply, inbox_id_int)
+    except Exception:
+        logger.exception("Forward chatwoot to agent error")
+
+def forward_telegram_to_agent(body: dict) -> None:
+    try:
+        msg = body.get("message") or {}
+        text = msg.get("text") or ""
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
+        message_id = msg.get("message_id")
+        sender = msg.get("from") or {}
+        sender_id = sender.get("id")
+        username = sender.get("first_name") or sender.get("username")
+        payload = {
+            "platform": "telegram",
+            "agent": agent_name() or "query_agent",
+            "chatroom_id": chat_id,
+            "thread_id": None,
+            "text": text,
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "username": username,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        idempotency_key = f"telegram:{message_id}" if message_id is not None else None
+        result = post_agent_message(payload, idempotency_key)
+        if not result:
+            return
+        reply = result.get("reply")
+        segments = result.get("segments")
+        if isinstance(segments, list):
+            for seg in segments:
+                if seg:
+                    send_telegram_message(chat_id, seg)
+        elif isinstance(reply, str) and reply:
+            send_telegram_message(chat_id, reply)
+    except Exception:
+        logger.exception("Forward telegram to agent error")
 def set_user_country(body: dict, choice_text: str) -> None:
     try:
         country = normalize_country(choice_text)
