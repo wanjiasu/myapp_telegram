@@ -156,18 +156,20 @@ def forward_chatwoot_to_agent(body: dict) -> None:
         msg_id = data.get("id") or message.get("id")
         inbox_id = (data.get("inbox_id") or message.get("inbox_id") or (data.get("conversation") or {}).get("inbox_id"))
         payload = {
-            "platform": "chatwoot",
-            "agent": agent_name() or "query_agent",
-            "chatroom_id": chatroom_id_raw or conversation_id,
-            "thread_id": None,
-            "text": content or "",
-            "message_id": msg_id,
-            "sender_id": sender.get("id") or data.get("sender_id") or message.get("sender_id"),
-            "username": username,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "conversation_id": conversation_id,
-            "account_id": account_id,
-            "inbox_id": inbox_id,
+            "messages": [{"role": "user", "content": content or ""}],
+            "metadata": {
+                "platform": "chatwoot",
+                "agent": agent_name() or "query_agent",
+                "chatroom_id": chatroom_id_raw or conversation_id,
+                "thread_id": None,
+                "message_id": msg_id,
+                "sender_id": sender.get("id") or data.get("sender_id") or message.get("sender_id"),
+                "username": username,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "conversation_id": conversation_id,
+                "account_id": account_id,
+                "inbox_id": inbox_id,
+            },
         }
         idempotency_key = f"chatwoot:{msg_id}" if msg_id is not None else None
         result = post_agent_message(payload, idempotency_key)
@@ -175,6 +177,25 @@ def forward_chatwoot_to_agent(body: dict) -> None:
             return
         reply = result.get("reply")
         segments = result.get("segments")
+        msgs = result.get("messages")
+        if not reply and not segments and isinstance(msgs, list):
+            texts = []
+            for m in msgs:
+                try:
+                    r = str(m.get("role")).lower()
+                    if r in ("assistant", "tool"):
+                        c = m.get("content")
+                        if isinstance(c, str):
+                            texts.append(c)
+                        elif isinstance(c, list):
+                            for part in c:
+                                t = part.get("text") or part.get("content") or part.get("output_text")
+                                if t:
+                                    texts.append(str(t))
+                except Exception:
+                    pass
+            if texts:
+                segments = texts
         acc_id_int = to_int(account_id)
         conv_id_int = to_int(conversation_id)
         inbox_id_int = to_int(inbox_id)
@@ -210,15 +231,17 @@ def forward_telegram_to_agent(body: dict) -> None:
         sender_id = sender.get("id")
         username = sender.get("first_name") or sender.get("username")
         payload = {
-            "platform": "telegram",
-            "agent": agent_name() or "query_agent",
-            "chatroom_id": chat_id,
-            "thread_id": None,
-            "text": text,
-            "message_id": message_id,
-            "sender_id": sender_id,
-            "username": username,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "messages": [{"role": "user", "content": text}],
+            "metadata": {
+                "platform": "telegram",
+                "agent": agent_name() or "query_agent",
+                "chatroom_id": chat_id,
+                "thread_id": None,
+                "message_id": message_id,
+                "sender_id": sender_id,
+                "username": username,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
         }
         idempotency_key = f"telegram:{message_id}" if message_id is not None else None
         result = post_agent_message(payload, idempotency_key)
@@ -226,6 +249,25 @@ def forward_telegram_to_agent(body: dict) -> None:
             return
         reply = result.get("reply")
         segments = result.get("segments")
+        msgs = result.get("messages")
+        if not reply and not segments and isinstance(msgs, list):
+            texts = []
+            for m in msgs:
+                try:
+                    r = str(m.get("role")).lower()
+                    if r in ("assistant", "tool"):
+                        c = m.get("content")
+                        if isinstance(c, str):
+                            texts.append(c)
+                        elif isinstance(c, list):
+                            for part in c:
+                                t = part.get("text") or part.get("content") or part.get("output_text")
+                                if t:
+                                    texts.append(str(t))
+                except Exception:
+                    pass
+            if texts:
+                segments = texts
         if isinstance(segments, list):
             for seg in segments:
                 if seg:
