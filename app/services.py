@@ -398,6 +398,14 @@ def forward_chatwoot_to_agent(body: dict) -> None:
             },
         }
         idempotency_key = f"chatwoot:{msg_id}" if msg_id is not None else None
+        acc_id_int = to_int(account_id)
+        conv_id_int = to_int(conversation_id)
+        inbox_id_int = to_int(inbox_id)
+        if acc_id_int is not None and conv_id_int is not None:
+            try:
+                send_chatwoot_reply(acc_id_int, conv_id_int, "小助手正在加紧思考ing, 请稍后...", inbox_id_int)
+            except Exception:
+                pass
         result = post_agent_message(payload, idempotency_key)
         if not result:
             return
@@ -456,6 +464,11 @@ def forward_telegram_to_agent(body: dict) -> None:
         sender = msg.get("from") or {}
         sender_id = sender.get("id")
         username = sender.get("first_name") or sender.get("username")
+        if chat_id is not None:
+            try:
+                send_telegram_message(chat_id, "小助手正在加紧思考ing, 请稍后...")
+            except Exception:
+                pass
         payload = {
             "messages": [{"role": "user", "content": text}],
             "metadata": {
