@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from .config import chatwoot_base_url, chatwoot_token, telegram_token
 from .db import pg_dsn
 from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id
-from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message, forward_chatwoot_to_agent, forward_telegram_to_agent
+from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, forward_chatwoot_to_agent, forward_telegram_to_agent
 from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply
 
 logger = logging.getLogger(__name__)
@@ -198,9 +198,9 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
                 reply = ai_pick_reply(hint)
                 if isinstance(reply, list):
                     for seg in reply:
-                        background_tasks.add_task(send_telegram_message, chat_id, seg)
+                        background_tasks.add_task(send_telegram_message_with_url_button, chat_id, seg)
                 else:
-                    background_tasks.add_task(send_telegram_message, chat_id, reply)
+                    background_tasks.add_task(send_telegram_message_with_url_button, chat_id, reply)
             except Exception:
                 logger.exception("Telegram AI pick reply error")
         if is_ai_history_command(text) and chat_id is not None:

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from .db import pg_dsn
 from .config import read_offset, telegram_token
 from .ai import ai_yesterday_text_for_country, ai_pick_text_for_country
-from .services import send_telegram_message
+from .services import send_telegram_message, send_telegram_message_with_url_button
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +97,9 @@ def _push_pick(user_row) -> None:
             if isinstance(text, list):
                 for seg in text:
                     if seg:
-                        send_telegram_message(chatroom_id, seg)
+                        send_telegram_message_with_url_button(chatroom_id, seg)
             else:
-                send_telegram_message(chatroom_id, text)
+                send_telegram_message_with_url_button(chatroom_id, text)
     except Exception:
         logger.exception("Push pick error")
 

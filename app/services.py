@@ -94,6 +94,33 @@ def send_telegram_message(chatroom_id_raw, text: str) -> None:
     except Exception:
         logger.exception("Telegram sendMessage error")
 
+def send_telegram_message_with_url_button(chatroom_id_raw, text: str, button_text: str = "🎟️ Place bet", button_url: str = "https://stake.com/?c=1ZvG3ZP5") -> None:
+    token = telegram_token()
+    if not token or chatroom_id_raw is None or not text:
+        return
+    chat_id = None
+    try:
+        if isinstance(chatroom_id_raw, int):
+            chat_id = chatroom_id_raw
+        else:
+            import re
+            m = re.search(r"-?\d+", str(chatroom_id_raw))
+            chat_id = int(m.group(0)) if m else None
+    except Exception:
+        chat_id = None
+    if chat_id is None:
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": {"inline_keyboard": [[{"text": str(button_text or ""), "url": str(button_url or "")}]]},
+    }
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception:
+        logger.exception("Telegram sendMessage with button error")
+
 def set_telegram_webhook() -> None:
     token = telegram_token()
     url = telegram_webhook_url()

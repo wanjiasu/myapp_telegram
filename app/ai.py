@@ -386,6 +386,7 @@ def ai_pick_reply(body: dict) -> str:
         if h and d and a:
             lines.append(f"💰 Odds: Home Win {h} - Draw {d} - Away Win {a}")
         lines.append(f"🔗 More details: https://betaione.com/football/{fixture_id}")
+        lines.append("🎟️ Place bet: https://stake.com/?c=1ZvG3ZP5")
         out.append("\n".join(lines))
     if not out:
         return "No AI picks available, please try again later."
@@ -495,6 +496,7 @@ def ai_pick_text_for_country(country: str) -> str:
         if h and d and a:
             lines.append(f"💰 Odds: Home Win {h} - Draw {d} - Away Win {a}")
         lines.append(f"🔗 More details: https://betaione.com/football/{fixture_id}")
+        lines.append("🎟️ Place bet: https://stake.com/?c=1ZvG3ZP5")
         out.append("\n".join(lines))
     if not out:
         return "No AI picks available, please try again later."
