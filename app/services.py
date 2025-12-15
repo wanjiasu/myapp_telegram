@@ -111,13 +111,20 @@ def send_telegram_message_with_url_button(chatroom_id_raw, text: str, button_tex
     if chat_id is None:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        import json as _json
+    except Exception:
+        _json = None
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "reply_markup": {"inline_keyboard": [[{"text": str(button_text or ""), "url": str(button_url or "")}]]},
+        "disable_web_page_preview": True,
+        "reply_markup": (_json.dumps({"inline_keyboard": [[{"text": str(button_text or ""), "url": str(button_url or "")}]]}) if _json else {"inline_keyboard": [[{"text": str(button_text or ""), "url": str(button_url or "")}]]}),
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code >= 300:
+            logger.error(f"Telegram sendMessage with button failed: {resp.status_code} {resp.text[:200]}")
     except Exception:
         logger.exception("Telegram sendMessage with button error")
 
