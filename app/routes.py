@@ -71,6 +71,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                     acc_id_int = to_int(account_id)
                     conv_id_int = to_int(conversation_id)
                     inbox_id_int = to_int(extract_inbox_id(body))
+                    # also send to Telegram with inline URL button (mirror /start keyboard behavior)
+                    chatroom_id_raw = extract_chatroom_id(body)
                     if acc_id_int is not None and conv_id_int is not None:
                         if isinstance(reply, list):
                             for seg in reply:
@@ -81,6 +83,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                                         t = t[3000:]
                                 else:
                                     send_chatwoot_reply(acc_id_int, conv_id_int, seg, inbox_id_int)
+                                if chatroom_id_raw is not None and seg:
+                                    background_tasks.add_task(send_telegram_message_with_url_button, chatroom_id_raw, seg)
                         else:
                             if isinstance(reply, str) and len(reply) > 3500:
                                 t = reply
@@ -89,6 +93,8 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                                     t = t[3000:]
                             else:
                                 send_chatwoot_reply(acc_id_int, conv_id_int, reply, inbox_id_int)
+                                if chatroom_id_raw is not None and reply:
+                                    background_tasks.add_task(send_telegram_message_with_url_button, chatroom_id_raw, reply)
                 except Exception:
                     logger.exception("AI pick reply error")
             if is_ai_history_command(content):
