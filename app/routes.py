@@ -8,7 +8,7 @@ from .config import chatwoot_base_url, chatwoot_token, telegram_token
 from .db import pg_dsn
 from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id
 from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, forward_chatwoot_to_agent, forward_telegram_to_agent
-from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply
+from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply, help_reply
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,16 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
             background_tasks.add_task(store_message, body)
             if is_help_command(content):
                 background_tasks.add_task(send_lark_help_alert, body)
+                try:
+                    acc_id_int = to_int(account_id)
+                    conv_id_int = to_int(conversation_id)
+                    inbox_id_int = to_int(extract_inbox_id(body))
+                    if acc_id_int is not None and conv_id_int is not None:
+                        background_tasks.add_task(
+                            send_chatwoot_reply, acc_id_int, conv_id_int, help_reply(body), inbox_id_int
+                        )
+                except Exception:
+                    logger.exception("Help reply error")
             choice = normalize_country(content)
             if choice:
                 background_tasks.add_task(set_user_country, body, content)
@@ -195,6 +205,12 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
         chat_id = chat.get("id")
         if is_start_command(text):
             background_tasks.add_task(send_telegram_country_keyboard, chat.get("id"))
+        if is_help_command(text) and chat_id is not None:
+            try:
+                hint = {"data": {"message": {"additional_attributes": {"chat_id": chat_id}}}}
+                background_tasks.add_task(send_telegram_message, chat_id, help_reply(hint))
+            except Exception:
+                logger.exception("Telegram help reply error")
         choice = normalize_country(text)
         if choice:
             background_tasks.add_task(set_user_country, body, text)

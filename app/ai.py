@@ -77,6 +77,13 @@ def calc_accuracy(rows, start=None, end=None) -> float:
     success = sum(1 for r in filtered if is_prediction_success(r.get("predict_winner"), r.get("result")))
     return round((success / total) * 100, 1)
 
+def help_reply(body: dict) -> str:
+    now_utc = datetime.now(timezone.utc)
+    bj = now_utc + timedelta(hours=8)
+    if 8 <= bj.hour < 20:
+        return "Connecting you to human support, please wait."
+    return "Human support is available from 08:00 to 20:00 Beijing time."
+
 def ai_history_reply(body: dict) -> str:
     country = get_country_for_chat(body)
     offset = read_offset(country) if country else 0
