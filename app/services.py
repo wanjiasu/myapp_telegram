@@ -92,12 +92,12 @@ def send_telegram_set_keyboard(chatroom_id_raw) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "Please choose what you want to set / 请选择您要设置的选项:",
+        "text": "请选择您要设置的选项：",
         "reply_markup": {
             "inline_keyboard": [
                 [
-                    {"text": "💰 Set Initial Capital / 设置初始资金", "callback_data": "set_capital"},
-                    {"text": "📅 Set Date / 设置日期", "callback_data": "set_date"}
+                    {"text": "初始资金", "callback_data": "set_capital"},
+                    {"text": "开始日期", "callback_data": "set_date"}
                 ]
             ]
         },
