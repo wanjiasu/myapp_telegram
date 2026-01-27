@@ -71,6 +71,44 @@ def send_telegram_country_keyboard(chatroom_id_raw) -> None:
     except Exception:
         logger.exception("Telegram keyboard error")
 
+def send_telegram_set_keyboard(chatroom_id_raw) -> None:
+    token = telegram_token()
+    if not token or chatroom_id_raw is None:
+        logger.warning("Telegram token/chat_id missing, skip set keyboard")
+        return
+    chat_id = None
+    try:
+        if isinstance(chatroom_id_raw, int):
+            chat_id = chatroom_id_raw
+        else:
+            import re
+            m = re.search(r"-?\d+", str(chatroom_id_raw))
+            chat_id = int(m.group(0)) if m else None
+    except Exception:
+        chat_id = None
+    if chat_id is None:
+        logger.warning("Telegram chat_id parse failed, skip set keyboard")
+        return
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": "Please choose what you want to set / 请选择您要设置的选项:",
+        "reply_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "💰 Set Initial Capital / 设置初始资金", "callback_data": "set_capital"},
+                    {"text": "📅 Set Date / 设置日期", "callback_data": "set_date"}
+                ]
+            ]
+        },
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code >= 300:
+            logger.error(f"Telegram set keyboard failed: {resp.status_code} {resp.text[:200]}")
+    except Exception:
+        logger.exception("Telegram set keyboard error")
+
 def send_telegram_message(chatroom_id_raw, text: str) -> None:
     token = telegram_token()
     if not token or chatroom_id_raw is None or not text:

@@ -6,8 +6,8 @@ from fastapi import APIRouter, Request, BackgroundTasks
 from datetime import datetime, timezone
 from .config import chatwoot_base_url, chatwoot_token, telegram_token
 from .db import pg_dsn
-from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id
-from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, forward_chatwoot_to_agent, forward_telegram_to_agent
+from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id, is_set_command
+from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, forward_chatwoot_to_agent, forward_telegram_to_agent, send_telegram_set_keyboard
 from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply, help_reply
 
 logger = logging.getLogger(__name__)
@@ -239,6 +239,8 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(send_telegram_message, chat_id, reply)
             except Exception:
                 logger.exception("Telegram AI yesterday reply error")
+        if is_set_command(text) and chat_id is not None:
+            background_tasks.add_task(send_telegram_set_keyboard, chat_id)
         t = str(text or "").strip()
         if chat_id is not None and t and not (
             is_start_command(text)
@@ -246,6 +248,7 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
             or is_ai_pick_command(text)
             or is_ai_history_command(text)
             or is_ai_yesterday_command(text)
+            or is_set_command(text)
             or normalize_country(text)
         ):
             background_tasks.add_task(forward_telegram_to_agent, body)
