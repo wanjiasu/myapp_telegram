@@ -1,13 +1,11 @@
 import logging
 import json
 import psycopg
-import asyncio
 from fastapi import APIRouter, Request, BackgroundTasks
-from datetime import datetime, timezone
 from .config import chatwoot_base_url, chatwoot_token, telegram_token
 from .db import pg_dsn
 from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id, is_set_command
-from .services import send_chatwoot_reply, send_telegram_country_keyboard, answer_callback_query, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, forward_chatwoot_to_agent, send_telegram_set_keyboard
+from .services import send_chatwoot_reply, send_telegram_country_keyboard, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, send_telegram_set_keyboard
 from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply, help_reply
 
 logger = logging.getLogger(__name__)
@@ -131,16 +129,6 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                         )
                 except Exception:
                     logger.exception("AI yesterday reply error")
-            t = str(content or "").strip()
-            if t and not (
-                is_help_command(content)
-                or is_ai_pick_command(content)
-                or is_ai_history_command(content)
-                or is_ai_yesterday_command(content)
-                or is_start_command(content)
-                or normalize_country(content)
-            ):
-                background_tasks.add_task(forward_chatwoot_to_agent, body)
         if is_start_command(content) and message_type == "incoming":
             acc_id_int = to_int(account_id)
             conv_id_int = to_int(conversation_id)
