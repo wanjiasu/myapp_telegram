@@ -4,7 +4,7 @@ import psycopg
 from datetime import datetime, timedelta, timezone
 from .db import pg_dsn
 from .config import read_offset
-from .utils import format_tags
+from .utils import format_tags, extract_chatroom_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,42 @@ def get_country_for_chat(body: dict) -> str:
                 row = cur.fetchone()
                 country = row[0] if row else None
             return country or None
+
+def get_user_profile_for_chat(body: dict):
+    b = body or {}
+    data = b.get("data") or b.get("payload") or b
+    chatroom_id = extract_chatroom_id(body)
+    external_id = (
+        (data.get("sender") or {}).get("id")
+        or data.get("sender_id")
+        or (data.get("contact") or {}).get("id")
+    )
+    country = None
+    initial_cash = None
+    initial_date = None
+    with psycopg.connect(pg_dsn()) as conn:
+        with conn.cursor() as cur:
+            if chatroom_id is not None:
+                cur.execute(
+                    "SELECT country, initial_cash, initial_date FROM users WHERE chatroom_id = %s LIMIT 1",
+                    (str(chatroom_id),),
+                )
+                row = cur.fetchone()
+                if row:
+                    country, initial_cash, initial_date = row[0], row[1], row[2]
+            if (country is None or initial_cash is None or initial_date is None) and external_id is not None:
+                cur.execute(
+                    "SELECT country, initial_cash, initial_date FROM users WHERE external_id = %s LIMIT 1",
+                    (str(external_id),),
+                )
+                row = cur.fetchone()
+                if row:
+                    country = country or row[0]
+                    if initial_cash is None:
+                        initial_cash = row[1]
+                    if initial_date is None:
+                        initial_date = row[2]
+    return country, initial_cash, initial_date
 
 def is_prediction_success(predict_winner, result) -> bool:
     try:
@@ -297,6 +333,99 @@ def ai_yesterday_text_for_country(country: str) -> str:
         lines.append(f"{i}. {r.get('home_name')} vs {r.get('away_name')} {emoji}")
     body_text = "\n".join(lines)
     return f"📊 AI Yesterday Accuracy: {acc:.1f}%\n\n{body_text}"
+
+def query_daily_profit_reply(body: dict) -> str:
+    country, initial_cash, initial_date = get_user_profile_for_chat(body)
+    if initial_cash is None or initial_date is None:
+        return "请先通过 /set 设置初始资金和开始日期"
+    offset = read_offset(country) if country else 0
+    rows = []
+    try:
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH RECURSIVE
+                    fixtures AS (
+                        SELECT (fixture_date + (%s || ' hour')::interval)::date AS day,
+                               t1.fixture_id, home_odd, draw_odd, away_odd,
+                               predict_winner, result, confidence
+                        FROM (
+                            SELECT fixture_id, predict_winner, confidence,
+                                   home_odd, draw_odd, away_odd, result
+                            FROM ai_eval
+                            WHERE if_bet=1
+                              AND home_odd IS NOT NULL
+                              AND home_odd <> '未找到赔率'
+                              AND result IS NOT NULL
+                        ) t1
+                        INNER JOIN (
+                            SELECT fixture_id, fixture_date
+                            FROM api_football_fixtures
+                        ) t2 ON t1.fixture_id=t2.fixture_id
+                    ),
+                    ranked AS (
+                        SELECT *,
+                               ROW_NUMBER() OVER (PARTITION BY day ORDER BY confidence DESC) AS rn
+                        FROM fixtures
+                    ),
+                    daily_top AS (
+                        SELECT day, fixture_id, predict_winner, result,
+                               CASE predict_winner
+                                    WHEN 3 THEN home_odd::numeric
+                                    WHEN 1 THEN draw_odd::numeric
+                                    WHEN 0 THEN away_odd::numeric
+                               END::numeric AS win_odd
+                        FROM ranked
+                        WHERE rn <= 5
+                    ),
+                    days AS (
+                        SELECT DISTINCT day FROM daily_top WHERE day >= %s ORDER BY day
+                    ),
+                    rec AS (
+                        SELECT (SELECT MIN(day) FROM days) AS day,
+                               CAST(%s AS numeric(12,2)) AS capital
+                        UNION ALL
+                        SELECT d.day,
+                               CAST(
+                                   ROUND(
+                                       (
+                                           ((5 - (SELECT COUNT(*) FROM daily_top t WHERE t.day = rec.day)) * (rec.capital / 5))
+                                           +
+                                           (
+                                               SELECT SUM(
+                                                   (rec.capital / 5) *
+                                                   CASE WHEN t.predict_winner = t.result
+                                                        THEN t.win_odd ELSE 0 END
+                                               )
+                                               FROM daily_top t
+                                               WHERE t.day = rec.day
+                                           )
+                                       ), 2
+                                   ) AS numeric(12,2)
+                               ) AS capital
+                        FROM rec
+                        JOIN days d ON d.day > rec.day
+                        WHERE d.day = (SELECT MIN(day) FROM days WHERE day > rec.day)
+                    )
+                    SELECT day, capital
+                    FROM rec
+                    WHERE day < (CURRENT_DATE - INTERVAL '1 day')
+                    ORDER BY day
+                    """,
+                    (int(offset), initial_date, initial_cash),
+                )
+                rows = cur.fetchall() or []
+    except Exception:
+        logger.exception("DB query daily profit error")
+    if not rows:
+        return "暂无每日盈亏数据"
+    lines = []
+    for r in rows:
+        day = r[0]
+        capital = r[1]
+        lines.append(f"{day}：{capital}")
+    return "📈 每日盈亏（模拟）\n" + "\n".join(lines)
 
 def ai_pick_reply(body: dict) -> str:
     country = get_country_for_chat(body)

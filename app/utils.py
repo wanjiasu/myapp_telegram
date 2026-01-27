@@ -77,6 +77,12 @@ def is_set_command(text: str) -> bool:
         return False
     return t.startswith("/set")
 
+def is_query_command(text: str) -> bool:
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    return t.startswith("/query")
+
 def extract_chatwoot_fields(body: dict):
     b = body or {}
     data = b.get("data") or b.get("payload") or b

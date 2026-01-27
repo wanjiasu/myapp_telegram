@@ -4,9 +4,9 @@ import psycopg
 from fastapi import APIRouter, Request, BackgroundTasks
 from .config import chatwoot_base_url, chatwoot_token, telegram_token
 from .db import pg_dsn
-from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id, is_set_command
+from .utils import extract_chatwoot_fields, is_help_command, is_ai_pick_command, is_ai_history_command, is_ai_yesterday_command, is_start_command, normalize_country, extract_chatroom_id, to_int, extract_inbox_id, is_set_command, is_query_command
 from .services import send_chatwoot_reply, send_telegram_country_keyboard, set_user_country, store_message, send_lark_help_alert, send_telegram_message, send_telegram_message_with_url_button, send_telegram_set_keyboard
-from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply, help_reply
+from .ai import ai_pick_reply, ai_history_reply, ai_yesterday_reply, help_reply, query_daily_profit_reply
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +171,18 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                         )
                 except Exception:
                     logger.exception("AI yesterday reply error")
+            if is_query_command(content):
+                try:
+                    reply = query_daily_profit_reply(body)
+                    acc_id_int = to_int(account_id)
+                    conv_id_int = to_int(conversation_id)
+                    inbox_id_int = to_int(extract_inbox_id(body))
+                    if acc_id_int is not None and conv_id_int is not None:
+                        background_tasks.add_task(
+                            send_chatwoot_reply, acc_id_int, conv_id_int, reply, inbox_id_int
+                        )
+                except Exception:
+                    logger.exception("Query daily profit error")
             if is_set_command(content):
                 try:
                     chatroom_id_raw = extract_chatroom_id(body)
@@ -257,14 +269,15 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
         try:
             from .services import get_user_pending_setting_telegram, save_user_initial_cash_telegram, save_user_initial_date_telegram, clear_user_pending_setting_telegram
             pending = get_user_pending_setting_telegram(chat_id, sender_id)
-            if pending == "set_capital":
+            t = str(text or "").strip()
+            if pending == "set_capital" and not t.startswith("/"):
                 ok = save_user_initial_cash_telegram(chat_id, sender_id, username, text)
                 if ok:
                     background_tasks.add_task(send_telegram_message, chat_id, "初始资金已记录")
                     clear_user_pending_setting_telegram(chat_id, sender_id)
                 else:
                     background_tasks.add_task(send_telegram_message, chat_id, "请输入有效的数字，如 1000 或 1000.00")
-            elif pending == "set_date":
+            elif pending == "set_date" and not t.startswith("/"):
                 ok = save_user_initial_date_telegram(chat_id, sender_id, username, text)
                 if ok:
                     background_tasks.add_task(send_telegram_message, chat_id, "开始日期已记录")
@@ -298,6 +311,13 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(send_telegram_message, chat_id, reply)
             except Exception:
                 logger.exception("Telegram AI yesterday reply error")
+        if is_query_command(text) and chat_id is not None:
+            try:
+                hint = {"data": {"message": {"additional_attributes": {"chat_id": chat_id}}}}
+                reply = query_daily_profit_reply(hint)
+                background_tasks.add_task(send_telegram_message, chat_id, reply)
+            except Exception:
+                logger.exception("Telegram query daily profit error")
         if is_set_command(text) and chat_id is not None:
             background_tasks.add_task(send_telegram_set_keyboard, chat_id)
     if cb:
