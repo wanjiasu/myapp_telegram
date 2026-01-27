@@ -172,17 +172,7 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                 except Exception:
                     logger.exception("AI yesterday reply error")
             if is_set_command(content):
-                try:
-                    chatroom_id_raw = extract_chatroom_id(body)
-                    if chatroom_id_raw is not None:
-                        background_tasks.add_task(send_telegram_set_keyboard, chatroom_id_raw)
-                    acc_id_int = to_int(account_id)
-                    conv_id_int = to_int(conversation_id)
-                    inbox_id_int = to_int(extract_inbox_id(body))
-                    if acc_id_int is not None and conv_id_int is not None:
-                        background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "请选择您要设置的选项：\n1) 初始资金\n2) 开始日期\n请在 Telegram 点击按钮继续", inbox_id_int)
-                except Exception:
-                    logger.exception("Chatwoot /set trigger telegram keyboard error")
+                pass
         if is_start_command(content) and message_type == "incoming":
             acc_id_int = to_int(account_id)
             conv_id_int = to_int(conversation_id)

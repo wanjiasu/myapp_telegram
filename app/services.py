@@ -93,7 +93,7 @@ def send_telegram_set_keyboard(chatroom_id_raw) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "请选择您要设置的选项：",
+        "text": "请选择您要设置的选项：\n1) 初始资金\n2) 开始日期\n请在 Telegram 点击按钮继续",
         "reply_markup": {
             "inline_keyboard": [
                 [
