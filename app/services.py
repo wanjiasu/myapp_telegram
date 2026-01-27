@@ -770,6 +770,149 @@ def clear_user_pending_setting_telegram(chat_id: int, sender_id) -> None:
     except Exception:
         logger.exception("Clear pending setting error")
 
+def get_user_pending_setting_chatwoot(body: dict) -> str:
+    try:
+        b = body or {}
+        data = b.get("data") or b.get("payload") or b
+        sender = data.get("sender") or data.get("contact") or {}
+        external_id = sender.get("id") or data.get("sender_id") or (data.get("contact") or {}).get("id")
+        chatroom_id_raw = extract_chatroom_id(body)
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                if external_id is not None:
+                    cur.execute(
+                        "SELECT pending_setting FROM users WHERE external_id = %s LIMIT 1",
+                        (str(external_id),),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return str(row[0])
+                if chatroom_id_raw is not None:
+                    cur.execute(
+                        "SELECT pending_setting FROM users WHERE chatroom_id = %s LIMIT 1",
+                        (str(chatroom_id_raw),),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return str(row[0])
+        return ""
+    except Exception:
+        return ""
+
+def save_user_initial_cash_chatwoot(body: dict, amount_text: str) -> bool:
+    try:
+        b = body or {}
+        data = b.get("data") or b.get("payload") or b
+        sender = data.get("sender") or data.get("contact") or {}
+        external_id = sender.get("id") or data.get("sender_id") or (data.get("contact") or {}).get("id")
+        username = sender.get("name") or data.get("name") or b.get("name")
+        chatroom_id_raw = extract_chatroom_id(body)
+        t = str(amount_text or "").strip().replace(",", "")
+        if not t:
+            return False
+        try:
+            amount = Decimal(t)
+        except InvalidOperation:
+            return False
+        if amount <= 0:
+            return False
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, initial_cash, pending_setting)
+                    VALUES (%s, %s, %s, %s, NULL)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        initial_cash = EXCLUDED.initial_cash,
+                        pending_setting = NULL,
+                        updated_at = NOW()
+                    """,
+                    (
+                        str(external_id) if external_id is not None else None,
+                        username,
+                        str(chatroom_id_raw) if chatroom_id_raw is not None else None,
+                        amount,
+                    ),
+                )
+                conn.commit()
+        return True
+    except Exception:
+        logger.exception("Save initial cash chatwoot error")
+        return False
+
+def save_user_initial_date_chatwoot(body: dict, date_text: str) -> bool:
+    try:
+        b = body or {}
+        data = b.get("data") or b.get("payload") or b
+        sender = data.get("sender") or data.get("contact") or {}
+        external_id = sender.get("id") or data.get("sender_id") or (data.get("contact") or {}).get("id")
+        username = sender.get("name") or data.get("name") or b.get("name")
+        chatroom_id_raw = extract_chatroom_id(body)
+        t = str(date_text or "").strip()
+        if not t:
+            return False
+        try:
+            d = datetime.strptime(t, "%Y%m%d").date()
+        except Exception:
+            return False
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, initial_date, pending_setting)
+                    VALUES (%s, %s, %s, %s, NULL)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        initial_date = EXCLUDED.initial_date,
+                        pending_setting = NULL,
+                        updated_at = NOW()
+                    """,
+                    (
+                        str(external_id) if external_id is not None else None,
+                        username,
+                        str(chatroom_id_raw) if chatroom_id_raw is not None else None,
+                        d,
+                    ),
+                )
+                conn.commit()
+        return True
+    except Exception:
+        logger.exception("Save initial date chatwoot error")
+        return False
+
+def set_user_pending_setting_chatwoot(body: dict, pending_setting: str) -> None:
+    try:
+        b = body or {}
+        data = b.get("data") or b.get("payload") or b
+        sender = data.get("sender") or data.get("contact") or {}
+        external_id = sender.get("id") or data.get("sender_id") or (data.get("contact") or {}).get("id")
+        username = sender.get("name") or data.get("name") or b.get("name")
+        chatroom_id_raw = extract_chatroom_id(body)
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, pending_setting)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        pending_setting = EXCLUDED.pending_setting,
+                        updated_at = NOW()
+                    """,
+                    (
+                        str(external_id) if external_id is not None else None,
+                        username,
+                        str(chatroom_id_raw) if chatroom_id_raw is not None else None,
+                        str(pending_setting or ""),
+                    ),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Set pending setting chatwoot error")
 def set_user_country(body: dict, choice_text: str) -> None:
     try:
         country = normalize_country(choice_text)

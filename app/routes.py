@@ -55,6 +55,48 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                         )
                 except Exception:
                     logger.exception("Help reply error")
+            try:
+                from .services import get_user_pending_setting_chatwoot, save_user_initial_cash_chatwoot, save_user_initial_date_chatwoot
+                pending = get_user_pending_setting_chatwoot(body)
+                t = str(content or "").strip()
+                if pending == "set_capital" and not t.startswith("/"):
+                    ok = save_user_initial_cash_chatwoot(body, str(content or ""))
+                    acc_id_int = to_int(account_id)
+                    conv_id_int = to_int(conversation_id)
+                    inbox_id_int = to_int(extract_inbox_id(body))
+                    if acc_id_int is not None and conv_id_int is not None:
+                        if ok:
+                            background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "初始资金已记录", inbox_id_int)
+                        else:
+                            background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "请输入有效的数字，如 1000 或 1000.00", inbox_id_int)
+                elif pending == "set_date" and not t.startswith("/"):
+                    ok = save_user_initial_date_chatwoot(body, str(content or ""))
+                    acc_id_int = to_int(account_id)
+                    conv_id_int = to_int(conversation_id)
+                    inbox_id_int = to_int(extract_inbox_id(body))
+                    if acc_id_int is not None and conv_id_int is not None:
+                        if ok:
+                            background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "开始日期已记录", inbox_id_int)
+                        else:
+                            background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "请输入有效日期，格式 20260127", inbox_id_int)
+            except Exception:
+                logger.exception("Process chatwoot pending setting input error")
+            try:
+                from .services import set_user_pending_setting_chatwoot
+                t = str(content or "").strip()
+                acc_id_int = to_int(account_id)
+                conv_id_int = to_int(conversation_id)
+                inbox_id_int = to_int(extract_inbox_id(body))
+                if t in ("初始资金", "set_capital"):
+                    set_user_pending_setting_chatwoot(body, "set_capital")
+                    if acc_id_int is not None and conv_id_int is not None:
+                        background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "请输入初始资金，如 1000 或 1000.00", inbox_id_int)
+                elif t in ("开始日期", "set_date"):
+                    set_user_pending_setting_chatwoot(body, "set_date")
+                    if acc_id_int is not None and conv_id_int is not None:
+                        background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "请输入开始日期，格式 20260127", inbox_id_int)
+            except Exception:
+                logger.exception("Process chatwoot set choice error")
             choice = normalize_country(content)
             if choice:
                 background_tasks.add_task(set_user_country, body, content)
@@ -134,6 +176,11 @@ async def chatwoot_webhook(request: Request, background_tasks: BackgroundTasks):
                     chatroom_id_raw = extract_chatroom_id(body)
                     if chatroom_id_raw is not None:
                         background_tasks.add_task(send_telegram_set_keyboard, chatroom_id_raw)
+                    acc_id_int = to_int(account_id)
+                    conv_id_int = to_int(conversation_id)
+                    inbox_id_int = to_int(extract_inbox_id(body))
+                    if acc_id_int is not None and conv_id_int is not None:
+                        background_tasks.add_task(send_chatwoot_reply, acc_id_int, conv_id_int, "请选择您要设置的选项：\n1) 初始资金\n2) 开始日期\n请在 Telegram 点击按钮继续", inbox_id_int)
                 except Exception:
                     logger.exception("Chatwoot /set trigger telegram keyboard error")
         if is_start_command(content) and message_type == "incoming":
