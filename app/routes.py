@@ -197,7 +197,10 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
     if msg:
         text = msg.get("text") or ""
         chat = msg.get("chat") or {}
+        sender = msg.get("from") or {}
         chat_id = chat.get("id")
+        sender_id = sender.get("id")
+        username = sender.get("first_name") or sender.get("username")
         if is_start_command(text):
             background_tasks.add_task(send_telegram_country_keyboard, chat.get("id"))
         if is_help_command(text) and chat_id is not None:
@@ -209,6 +212,25 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
         choice = normalize_country(text)
         if choice:
             background_tasks.add_task(set_user_country, body, text)
+        try:
+            from .services import get_user_pending_setting_telegram, save_user_initial_cash_telegram, save_user_initial_date_telegram, clear_user_pending_setting_telegram
+            pending = get_user_pending_setting_telegram(chat_id, sender_id)
+            if pending == "set_capital":
+                ok = save_user_initial_cash_telegram(chat_id, sender_id, username, text)
+                if ok:
+                    background_tasks.add_task(send_telegram_message, chat_id, "初始资金已记录")
+                    clear_user_pending_setting_telegram(chat_id, sender_id)
+                else:
+                    background_tasks.add_task(send_telegram_message, chat_id, "请输入有效的数字，如 1000 或 1000.00")
+            elif pending == "set_date":
+                ok = save_user_initial_date_telegram(chat_id, sender_id, username, text)
+                if ok:
+                    background_tasks.add_task(send_telegram_message, chat_id, "开始日期已记录")
+                    clear_user_pending_setting_telegram(chat_id, sender_id)
+                else:
+                    background_tasks.add_task(send_telegram_message, chat_id, "请输入有效日期，格式 20260127")
+        except Exception:
+            logger.exception("Process pending setting input error")
         if is_ai_pick_command(text) and chat_id is not None:
             try:
                 hint = {"data": {"message": {"additional_attributes": {"chat_id": chat_id}}}}
@@ -243,4 +265,20 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
             background_tasks.add_task(set_user_country, body, data)
             from .services import answer_callback_query
             background_tasks.add_task(answer_callback_query, token, cb.get("id"), "Selection recorded")
+        try:
+            from .services import set_user_pending_setting_telegram
+            chat = (cb.get("message") or {}).get("chat") or {}
+            chat_id = chat.get("id")
+            sender = cb.get("from") or {}
+            sender_id = sender.get("id")
+            username = sender.get("first_name") or sender.get("username")
+            data = cb.get("data") or ""
+            if data in ("set_capital", "set_date") and chat_id is not None:
+                set_user_pending_setting_telegram(chat_id, sender_id, username, data)
+                if data == "set_capital":
+                    background_tasks.add_task(send_telegram_message, chat_id, "请输入初始资金，如 1000 或 1000.00")
+                else:
+                    background_tasks.add_task(send_telegram_message, chat_id, "请输入开始日期，格式 20260127")
+        except Exception:
+            logger.exception("Process set callback error")
     return {"status": "ok"}

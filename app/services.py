@@ -2,6 +2,7 @@ import logging
 import os
 import requests
 import psycopg
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone, timedelta
 from .config import chatwoot_base_url, chatwoot_token, telegram_token, telegram_webhook_url, allowed_account_inbox_pairs, agent_url, agent_name, agent_endpoint_path, thread_ttl_minutes_telegram, thread_ttl_minutes_chatwoot, thread_max_age_days
 from .db import pg_dsn
@@ -646,6 +647,129 @@ def forward_chatwoot_to_agent(body: dict) -> None:
 
 def forward_telegram_to_agent(body: dict) -> None:
     return
+def get_user_pending_setting_telegram(chat_id: int, sender_id) -> str:
+    try:
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                if sender_id is not None:
+                    cur.execute(
+                        "SELECT pending_setting FROM users WHERE external_id = %s LIMIT 1",
+                        (str(sender_id),),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return str(row[0])
+                cur.execute(
+                    "SELECT pending_setting FROM users WHERE chatroom_id = %s LIMIT 1",
+                    (str(chat_id),),
+                )
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] else ""
+    except Exception:
+        return ""
+
+def set_user_pending_setting_telegram(chat_id: int, sender_id, username: str, pending_setting: str) -> None:
+    try:
+        if sender_id is None:
+            return
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, pending_setting)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        pending_setting = EXCLUDED.pending_setting,
+                        updated_at = NOW()
+                    """,
+                    (str(sender_id), username, str(chat_id), str(pending_setting or "")),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Set pending setting error")
+
+def save_user_initial_cash_telegram(chat_id: int, sender_id, username: str, amount_text: str) -> bool:
+    try:
+        if sender_id is None:
+            return False
+        t = str(amount_text or "").strip().replace(",", "")
+        if not t:
+            return False
+        try:
+            amount = Decimal(t)
+        except InvalidOperation:
+            return False
+        if amount <= 0:
+            return False
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, initial_cash, pending_setting)
+                    VALUES (%s, %s, %s, %s, NULL)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        initial_cash = EXCLUDED.initial_cash,
+                        pending_setting = NULL,
+                        updated_at = NOW()
+                    """,
+                    (str(sender_id), username, str(chat_id), amount),
+                )
+                conn.commit()
+        return True
+    except Exception:
+        logger.exception("Save initial cash error")
+        return False
+
+def save_user_initial_date_telegram(chat_id: int, sender_id, username: str, date_text: str) -> bool:
+    try:
+        if sender_id is None:
+            return False
+        t = str(date_text or "").strip()
+        if not t:
+            return False
+        try:
+            d = datetime.strptime(t, "%Y%m%d").date()
+        except Exception:
+            return False
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (external_id, username, chatroom_id, initial_date, pending_setting)
+                    VALUES (%s, %s, %s, %s, NULL)
+                    ON CONFLICT (external_id) DO UPDATE SET
+                        username = COALESCE(EXCLUDED.username, users.username),
+                        chatroom_id = COALESCE(EXCLUDED.chatroom_id, users.chatroom_id),
+                        initial_date = EXCLUDED.initial_date,
+                        pending_setting = NULL,
+                        updated_at = NOW()
+                    """,
+                    (str(sender_id), username, str(chat_id), d),
+                )
+                conn.commit()
+        return True
+    except Exception:
+        logger.exception("Save initial date error")
+        return False
+
+def clear_user_pending_setting_telegram(chat_id: int, sender_id) -> None:
+    try:
+        if sender_id is None:
+            return
+        with psycopg.connect(pg_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET pending_setting = NULL, updated_at = NOW() WHERE external_id = %s",
+                    (str(sender_id),),
+                )
+                conn.commit()
+    except Exception:
+        logger.exception("Clear pending setting error")
+
 def set_user_country(body: dict, choice_text: str) -> None:
     try:
         country = normalize_country(choice_text)

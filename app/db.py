@@ -65,6 +65,14 @@ def init_db() -> None:
                 )
                 cur.execute(
                     """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS initial_cash NUMERIC,
+                    ADD COLUMN IF NOT EXISTS initial_date DATE,
+                    ADD COLUMN IF NOT EXISTS pending_setting TEXT
+                    """
+                )
+                cur.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS ai_eval (
                         id BIGSERIAL PRIMARY KEY,
                         fixture_id BIGINT,
