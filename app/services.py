@@ -645,72 +645,7 @@ def forward_chatwoot_to_agent(body: dict) -> None:
         logger.exception("Forward chatwoot to agent error")
 
 def forward_telegram_to_agent(body: dict) -> None:
-    try:
-        msg = body.get("message") or {}
-        text = msg.get("text") or ""
-        chat = msg.get("chat") or {}
-        chat_id = chat.get("id")
-        message_id = msg.get("message_id")
-        sender = msg.get("from") or {}
-        sender_id = sender.get("id")
-        username = sender.get("first_name") or sender.get("username")
-        if chat_id is not None:
-            try:
-                send_telegram_message(chat_id, "Assistant is thinking, please wait...")
-            except Exception:
-                pass
-        payload = {
-            "messages": [{"role": "user", "content": text}],
-            "metadata": {
-                "platform": "telegram",
-                "agent": agent_name() or "query_agent",
-                "chatroom_id": chat_id,
-                "thread_id": None,
-                "message_id": message_id,
-                "sender_id": sender_id,
-                "username": username,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-        }
-        idempotency_key = f"telegram:{message_id}" if message_id is not None else None
-        tid = ensure_agent_thread("telegram", str(chat_id)) if chat_id is not None else None
-        if tid:
-            try:
-                payload["metadata"]["thread_id"] = tid
-            except Exception:
-                pass
-        result = post_agent_message(payload, idempotency_key, thread_id=tid)
-        if not result:
-            return
-        reply = result.get("reply")
-        segments = result.get("segments")
-        msgs = result.get("messages")
-        if not reply and not segments and isinstance(msgs, list):
-            texts = []
-            for m in msgs:
-                try:
-                    r = str(m.get("role")).lower()
-                    if r in ("assistant", "tool"):
-                        c = m.get("content")
-                        if isinstance(c, str):
-                            texts.append(c)
-                        elif isinstance(c, list):
-                            for part in c:
-                                t = part.get("text") or part.get("content") or part.get("output_text")
-                                if t:
-                                    texts.append(str(t))
-                except Exception:
-                    pass
-            if texts:
-                segments = texts
-        if isinstance(segments, list):
-            for seg in segments:
-                if seg:
-                    send_telegram_message(chat_id, seg)
-        elif isinstance(reply, str) and reply:
-            send_telegram_message(chat_id, reply)
-    except Exception:
-        logger.exception("Forward telegram to agent error")
+    return
 def set_user_country(body: dict, choice_text: str) -> None:
     try:
         country = normalize_country(choice_text)
